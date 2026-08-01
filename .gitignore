@@ -1,0 +1,27 @@
+# env / secrets
+.env
+*.local
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# node
+node_modules/
+.next/
+out/
+
+# runtime data
+data/
+backend/data/
+
+# docker volumes are external
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

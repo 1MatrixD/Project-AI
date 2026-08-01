@@ -1,0 +1,118 @@
+"""Фейковый claude CLI для тестов: имитирует ответы по типу промпта."""
+
+import json
+import re
+import sys
+
+
+def get_arg(flag: str) -> str | None:
+    args = sys.argv[1:]
+    for i, a in enumerate(args):
+        if a == flag and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def result_payload(text: str) -> dict:
+    return {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": text,
+        "session_id": "fake-session-123",
+        "total_cost_usd": 0.001,
+        "duration_ms": 42,
+        "num_turns": 1,
+    }
+
+
+def answer_for(prompt: str) -> str:
+    if "Проанализируй следующие файлы" in prompt:
+        paths = re.findall(r"^- (.+?) \(", prompt, flags=re.MULTILINE)
+        items = []
+        for p in paths:
+            items.append(
+                {
+                    "path": p,
+                    "role": f"Тестовая роль {p}",
+                    "summary": f"Файл {p} делает тестовые вещи.",
+                    "kind": "code",
+                    "entities": [
+                        {"name": f"entity_{p.split('/')[-1].split('.')[0]}", "etype": "function", "summary": "тестовая функция"}
+                    ],
+                    "links": [],
+                    "tags": ["тест"],
+                }
+            )
+        return json.dumps(items, ensure_ascii=False)
+    if "цельное представление о проекте" in prompt:
+        return json.dumps(
+            {
+                "summary": "Тестовый проект для проверки пайплайна.",
+                "project_kinds": ["backend"],
+                "stack": ["Python"],
+                "components": [
+                    {"name": "Ядро", "kind": "module", "summary": "Основной модуль", "paths": []}
+                ],
+                "business_logic": [{"name": "Тест-фича", "summary": "Работает в тестах"}],
+                "conventions": "Пишем тесты.",
+                "how_to": {"run": "pytest"},
+            },
+            ensure_ascii=False,
+        )
+    if "Извлеки из материала" in prompt:
+        return json.dumps(
+            {
+                "summary": "Обсудили две задачи.",
+                "tasks": [
+                    {"title": "Сделать фичу А", "description": "Описание фичи А из созвона", "plan": ["шаг 1", "шаг 2"]},
+                    {"title": "Починить баг Б", "description": "Описание бага Б", "plan": []},
+                ],
+            },
+            ensure_ascii=False,
+        )
+    if "реализована ли эта задача" in prompt or "Проверь по кодовой базе" in prompt:
+        implemented = "yes" if "Сделать фичу А" in prompt else "no"
+        return json.dumps(
+            {
+                "implemented": implemented,
+                "confidence": "high",
+                "report": "Тестовая проверка.",
+                "files": ["main.py"] if implemented == "yes" else [],
+            },
+            ensure_ascii=False,
+        )
+    if '"groups"' in prompt or "групп файлов для рекурсивного анализа" in prompt:
+        return json.dumps({"groups": [{"focus": "тест", "paths": ["main.py"]}]}, ensure_ascii=False)
+    return "Тестовый ответ ассистента."
+
+
+def main() -> None:
+    prompt = get_arg("-p") or ""
+    fmt = get_arg("--output-format") or "text"
+    text = answer_for(prompt)
+
+    if fmt == "stream-json":
+        events = [
+            {"type": "system", "subtype": "init", "session_id": "fake-session-123", "model": get_arg("--model") or "opus"},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "mcp__projectai__graph_search", "input": {"query": "тест"}},
+                    ]
+                },
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}},
+            result_payload(text),
+        ]
+        for e in events:
+            sys.stdout.write(json.dumps(e, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    else:
+        sys.stdout.write(json.dumps(result_payload(text), ensure_ascii=False))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
