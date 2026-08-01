@@ -104,6 +104,8 @@ class JobOut(ORMModel):
     progress: float
     detail: str
     stats: dict
+    #: параметры запуска — по ним UI понимает, какие именно задачи сейчас в работе
+    params: dict
     error: str | None
     created_at: datetime
     started_at: datetime | None

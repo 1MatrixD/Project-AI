@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, fmtDate } from "@/lib/api";
-import type { PlanStep, Task, TaskStatus } from "@/lib/types";
+import type { Job, PlanStep, Task, TaskStatus } from "@/lib/types";
 
 type TaskDetail = {
   files: { path: string; role: string | null; summary: string | null }[];
@@ -41,10 +41,26 @@ const RELATION_LABEL: Record<string, string> = {
 export default function KanbanTab({
   projectId,
   refreshTick,
+  jobs = [],
 }: {
   projectId: string;
   refreshTick: number;
+  jobs?: Job[];
 }) {
+  // Какие карточки прямо сейчас разбирает ИИ. Берём из параметров активных
+  // job'ов: проработка идёт минутами, и без отметки на карточке непонятно,
+  // почему описание не меняется.
+  const busyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const j of jobs) {
+      if (j.status !== "running" && j.status !== "queued") continue;
+      if (j.type !== "enrich_tasks" && j.type !== "plan_task") continue;
+      for (const id of j.params?.task_ids ?? []) ids.add(id);
+      if (j.params?.task_id) ids.add(j.params.task_id);
+    }
+    return ids;
+  }, [jobs]);
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -149,13 +165,18 @@ export default function KanbanTab({
               {colTasks.map((t) => {
                 const planDone = t.plan.filter((p) => p.done).length;
                 const waiting = t.status !== "done" ? openDeps(t, tasks) : [];
+                const busy = busyIds.has(t.id);
                 return (
                   <div
                     key={t.id}
                     draggable
                     onDragStart={() => setDragId(t.id)}
                     onClick={() => setSelectedId(t.id)}
-                    className="border border-[var(--border)] bg-[var(--surface-2)] rounded-lg p-3 space-y-1.5 cursor-pointer hover:border-[var(--accent)]"
+                    className={`border bg-[var(--surface-2)] rounded-lg p-3 space-y-1.5 cursor-pointer ${
+                      busy
+                        ? "border-[var(--accent)]"
+                        : "border-[var(--border)] hover:border-[var(--accent)]"
+                    }`}
                   >
                     <div className="text-sm leading-snug">{t.title}</div>
                     <div className="flex gap-1.5 flex-wrap">
@@ -165,8 +186,12 @@ export default function KanbanTab({
                           план {planDone}/{t.plan.length}
                         </span>
                       )}
-                      {t.extra?.enriched && (
-                        <span className="chip text-[var(--accent-2)]">🧠 RLM</span>
+                      {busy ? (
+                        <span className="chip pulse text-[var(--accent)]">🧠 разбираю…</span>
+                      ) : (
+                        t.extra?.enriched && (
+                          <span className="chip text-[var(--accent-2)]">🧠 RLM</span>
+                        )
                       )}
                       {t.extra?.planned && (
                         <span className="chip text-[var(--accent)]" title="Декомпозирована планировщиком на подзадачи">

@@ -31,6 +31,8 @@ export type Job = {
   progress: number;
   detail: string;
   stats: Record<string, unknown>;
+  /** Параметры запуска: по task_ids видно, какие карточки сейчас в работе. */
+  params?: { task_ids?: string[]; task_id?: string } & Record<string, unknown>;
   error: string | null;
   created_at: string;
 };
