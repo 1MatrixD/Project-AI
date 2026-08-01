@@ -67,6 +67,8 @@ class ProjectDetailOut(ProjectOut):
 class IndexRequest(BaseModel):
     mode: str = "update"  # initial | update | reverify
     ai_limit: int | None = None  # переопределить бюджет ИИ-анализа
+    auto_continue: bool = False  # продолжать бэклог анализа до конца автоматически
+    retry_errors: bool = False  # повторить упавшие файлы в этом прогоне
 
 
 # --- files ---

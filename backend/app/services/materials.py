@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
-from ..jobs_runner import runner
+from ..jobs_runner import JobCancelled, runner
 from ..models import Material, Project, TaskItem, utcnow
 from . import claude_cli, extract, graphdb
 from .prompts import TASK_EXTRACTION_PROMPT, TASK_EXTRACTION_SYSTEM
@@ -128,6 +128,7 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
             )
             await session.commit()
 
+        runner.check_cancelled(job_id)
         summary = ""
         created_tasks = 0
         created_ids: list[str] = []
@@ -206,6 +207,14 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
 
         stats["tasks_created"] = created_tasks
         return stats
+    except JobCancelled:
+        # отмена — не ошибка: извлечённый текст сохранён, можно переобработать
+        async with maker() as session:
+            await session.execute(
+                update(Material).where(Material.id == material_id).values(status="uploaded")
+            )
+            await session.commit()
+        raise
     except Exception as e:
         async with maker() as session:
             await session.execute(

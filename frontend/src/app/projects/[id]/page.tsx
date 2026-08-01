@@ -30,6 +30,8 @@ const JOB_LABELS: Record<string, string> = {
   index: "Индексация",
   knowledge_update: "Обновление карты знаний",
   verify_tasks: "ИИ-проверка задач",
+  enrich_tasks: "RLM-проработка задач",
+  git_import: "Импорт истории git",
   process_material: "Обработка материала",
   plugin_generate: "Генерация плагина",
 };
@@ -129,12 +131,26 @@ export default function ProjectPage() {
         <div className="card px-4 py-3 space-y-2">
           {activeJobs.map((j) => (
             <div key={j.id} className="space-y-1">
-              <div className="flex justify-between text-xs text-[var(--muted)]">
-                <span className="pulse">
+              <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                <span className="pulse flex-1 truncate">
                   {JOB_LABELS[j.type] ?? j.type}
                   {j.detail ? ` — ${j.detail}` : ""}
                 </span>
                 <span>{Math.round(j.progress * 100)}%</span>
+                <button
+                  title="Отменить задачу"
+                  onClick={async () => {
+                    try {
+                      await api(`/projects/${id}/jobs/${j.id}/cancel`, { method: "POST" });
+                    } catch {
+                      /* уже завершена */
+                    }
+                    load();
+                  }}
+                  className="px-1.5 rounded hover:bg-[var(--surface-2)] hover:text-red-400 transition-colors"
+                >
+                  ✕
+                </button>
               </div>
               <div className="h-1.5 rounded bg-[var(--surface-2)] overflow-hidden">
                 <div

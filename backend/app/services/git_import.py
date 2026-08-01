@@ -231,7 +231,6 @@ def _fmt_commits(commits: list[Commit]) -> str:
 
 
 async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
-    s = get_settings()
     default_limit = max(1, min(1000, int(params.get("per_repo_limit", 150))))
     default_since = params.get("since_days")
     default_since = int(default_since) if default_since else None
@@ -267,7 +266,39 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
     stats = {"repos": len(repos), "commits_new": 0, "tasks_created": 0, "tasks_closed": 0, "groups": 0}
     root_abs = os.path.abspath(project.root_path)
 
+    try:
+        await _import_repos(
+            job_id, project, repos, repo_configs, imported, stats,
+            context, decisions, root_abs, default_limit, default_since,
+        )
+    finally:
+        # хэши обработанных порций сохраняем даже при отмене — иначе
+        # повторный импорт надублирует задачи
+        async with maker() as session:
+            db_project = await session.get(Project, project_id)
+            meta = dict(db_project.meta)
+            meta["git_imported"] = sorted(imported)[-3000:]
+            db_project.meta = meta
+            await session.commit()
+    return stats
+
+
+async def _import_repos(
+    job_id: uuid.UUID,
+    project: Project,
+    repos: list[str],
+    repo_configs: dict,
+    imported: set[str],
+    stats: dict,
+    context: str,
+    decisions: str,
+    root_abs: str,
+    default_limit: int,
+    default_since: int | None,
+) -> None:
+    s = get_settings()
     for idx, repo in enumerate(repos):
+        runner.check_cancelled(job_id)
         rel_repo = os.path.relpath(repo, root_abs).replace("\\", "/")
         repo_prefix = "" if rel_repo == "." else rel_repo + "/"
         await runner.report(
@@ -285,8 +316,9 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
 
         # порции, чтобы промпт не разрастался
         for chunk_start in range(0, len(fresh), 60):
+            runner.check_cancelled(job_id)
             chunk = fresh[chunk_start : chunk_start + 60]
-            existing = await _existing_tasks_with_plans(project_id)
+            existing = await _existing_tasks_with_plans(project.id)
             prompt = GIT_IMPORT_PROMPT.format(
                 project_name=project.name,
                 repo=rel_repo or ".",
@@ -317,14 +349,6 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
                 await _apply_group(project, g, rel_repo, stats, commit_dates)
                 stats["groups"] += 1
             imported.update(c.hash for c in chunk)
-
-    async with maker() as session:
-        db_project = await session.get(Project, project_id)
-        meta = dict(db_project.meta)
-        meta["git_imported"] = sorted(imported)[-3000:]
-        db_project.meta = meta
-        await session.commit()
-    return stats
 
 
 def _order_from_dates(commits: list[str], commit_dates: dict[str, str]) -> float:

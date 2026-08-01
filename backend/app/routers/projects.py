@@ -129,6 +129,10 @@ async def start_index(
     params: dict = {"mode": data.mode}
     if data.ai_limit is not None:
         params["ai_limit"] = max(0, min(500, data.ai_limit))
+    if data.auto_continue:
+        params["auto_continue"] = True
+    if data.retry_errors:
+        params["retry_errors"] = True
     job = await runner.submit(project.id, "index", params)
     return {"job_id": str(job.id), "status": job.status}
 

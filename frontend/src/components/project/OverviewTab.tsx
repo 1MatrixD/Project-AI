@@ -27,6 +27,7 @@ export default function OverviewTab({
   const [changes, setChanges] = useState<ChangeReport[]>([]);
   const [error, setError] = useState("");
   const [showGitImport, setShowGitImport] = useState(false);
+  const [autoContinue, setAutoContinue] = useState(true);
   const overview = project.meta.overview;
   const stats = project.meta.stats;
   const graphStats = project.stats;
@@ -39,9 +40,10 @@ export default function OverviewTab({
     setError("");
     if (mode === "reverify" && !confirm("Перепроверить весь проект заново? Все файлы будут переанализированы ИИ.")) return;
     try {
+      // ручной запуск: ретраим упавшие файлы; при включённой галке гоним бэклог до конца
       await api(`/projects/${project.id}/index`, {
         method: "POST",
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, retry_errors: true, auto_continue: autoContinue }),
       });
       onAction();
     } catch (e) {
@@ -57,7 +59,18 @@ export default function OverviewTab({
         <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="font-medium">О проекте</div>
-            <div className="flex gap-2 flex-wrap">
+            <div className="flex gap-2 flex-wrap items-center">
+              <label
+                className="flex items-center gap-1.5 text-xs text-[var(--muted)] cursor-pointer select-none"
+                title="После каждого прогона автоматически продолжать ИИ-анализ, пока бэклог не опустеет"
+              >
+                <input
+                  type="checkbox"
+                  checked={autoContinue}
+                  onChange={(e) => setAutoContinue(e.target.checked)}
+                />
+                до конца бэклога
+              </label>
               <button className="btn btn-ghost text-sm" onClick={() => runIndex("update")}>
                 ⟳ Обновить индекс
               </button>

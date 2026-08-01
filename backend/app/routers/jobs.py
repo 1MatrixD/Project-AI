@@ -81,3 +81,19 @@ async def get_job(
     if job is None or job.project_id != project.id:
         raise HTTPException(status_code=404, detail="Задача не найдена")
     return JobOut.model_validate(job)
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_job(
+    job_id: uuid.UUID,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Отмена фоновой задачи: queued — сразу, running — после текущего батча."""
+    job = await session.get(Job, job_id)
+    if job is None or job.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    result = await runner.cancel(job_id)
+    if result is None:
+        raise HTTPException(status_code=409, detail="Задача уже завершена")
+    return {"status": result}

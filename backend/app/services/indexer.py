@@ -10,7 +10,7 @@ from sqlalchemy import delete, select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
-from ..jobs_runner import runner
+from ..jobs_runner import JobCancelled, runner
 from ..models import ChangeReport, Project, ProjectFile, TaskItem, WorkLogEntry, utcnow
 from . import claude_cli, graphdb
 from .prompts import (
@@ -112,12 +112,15 @@ def _is_ai_analyzable(rel_path: str, kind: str, size: int) -> bool:
     return True
 
 
-async def _select_files_for_analysis(project_id: uuid.UUID, limit: int) -> list[ProjectFile]:
+async def _select_files_for_analysis(
+    project_id: uuid.UUID, limit: int, retry_errors: bool = False
+) -> list[ProjectFile]:
+    statuses = ["pending", "error"] if retry_errors else ["pending"]
     async with get_sessionmaker()() as session:
         res = await session.execute(
             select(ProjectFile).where(
                 ProjectFile.project_id == project_id,
-                ProjectFile.analysis_status == "pending",
+                ProjectFile.analysis_status.in_(statuses),
             )
         )
         rows = [
@@ -126,7 +129,15 @@ async def _select_files_for_analysis(project_id: uuid.UUID, limit: int) -> list[
             if _is_ai_analyzable(r.rel_path, r.kind, r.size)
         ]
     prio = {"config": 0, "code": 1, "test": 2, "doc": 3, "other": 4}
-    rows.sort(key=lambda r: (prio.get(r.kind, 5), r.rel_path.count("/"), r.size))
+    # pending раньше error: сначала новое, потом ретраи упавших
+    rows.sort(
+        key=lambda r: (
+            0 if r.analysis_status == "pending" else 1,
+            prio.get(r.kind, 5),
+            r.rel_path.count("/"),
+            r.size,
+        )
+    )
     return rows[:limit]
 
 
@@ -134,18 +145,24 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     s = get_settings()
     file_list = "\n".join(f"- {f.rel_path} ({f.kind}, {f.size} байт)" for f in batch)
     prompt = FILE_ANALYSIS_PROMPT.format(file_list=file_list)
-    try:
-        obj, meta = await claude_cli.run_json_prompt(
-            prompt,
-            cwd=project.root_path,
-            system=FILE_ANALYSIS_SYSTEM,
-            tools=["Read"],
-            model=s.ai_model,
-            reasoning=s.ai_reasoning,
-            timeout=s.claude_timeout_sec,
-        )
-    except claude_cli.ClaudeError as e:
-        log.warning("Батч анализа упал: %s", e)
+    obj = meta = None
+    for attempt in (1, 2):  # транзиентные сбои claude ретраим один раз
+        try:
+            obj, meta = await claude_cli.run_json_prompt(
+                prompt,
+                cwd=project.root_path,
+                system=FILE_ANALYSIS_SYSTEM,
+                tools=["Read"],
+                model=s.ai_model,
+                reasoning=s.ai_reasoning,
+                timeout=s.claude_timeout_sec,
+            )
+            break
+        except claude_cli.ClaudeError as e:
+            log.warning("Батч анализа упал (попытка %d): %s", attempt, e)
+            if attempt == 1:
+                await asyncio.sleep(2)
+    if obj is None:
         async with get_sessionmaker()() as session:
             await session.execute(
                 update(ProjectFile)
@@ -188,9 +205,16 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     }
 
 
-async def _run_ai_analysis(job_id: uuid.UUID, project: Project, limit: int, base_progress: float, span: float) -> dict:
+async def _run_ai_analysis(
+    job_id: uuid.UUID,
+    project: Project,
+    limit: int,
+    base_progress: float,
+    span: float,
+    retry_errors: bool = False,
+) -> dict:
     s = get_settings()
-    files = await _select_files_for_analysis(project.id, limit)
+    files = await _select_files_for_analysis(project.id, limit, retry_errors)
     if not files:
         return {"analyzed": 0, "errors": 0, "cost_usd": 0.0, "pending_left": 0}
     batches = [files[i : i + s.ai_batch_size] for i in range(0, len(files), s.ai_batch_size)]
@@ -200,6 +224,8 @@ async def _run_ai_analysis(job_id: uuid.UUID, project: Project, limit: int, base
 
     async def run_one(b: list[ProjectFile]) -> None:
         nonlocal done_count
+        if runner.is_cancelled(job_id):
+            return  # не начинаем новые батчи после запроса отмены
         async with sem:
             r = await _analyze_batch(project, b)
         totals["analyzed"] += r["analyzed"]
@@ -213,6 +239,7 @@ async def _run_ai_analysis(job_id: uuid.UUID, project: Project, limit: int, base
         )
 
     await asyncio.gather(*(run_one(b) for b in batches))
+    runner.check_cancelled(job_id)
 
     async with get_sessionmaker()() as session:
         res = await session.execute(
@@ -291,6 +318,7 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         force = mode == "reverify"
         scanned = await asyncio.to_thread(scan_directory, project.root_path, known, force)
         diff = diff_scan(scanned, known)
+        runner.check_cancelled(job_id)
 
         await runner.report(job_id, 0.12, "Обновление реестра файлов")
         await _apply_scan_to_db(project_id, diff)
@@ -334,7 +362,10 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         limit = s.ai_max_files_per_run if raw_limit is None else int(raw_limit)
         if s.ai_analysis_enabled and params.get("ai", True) and limit > 0:
             await runner.report(job_id, 0.25, "ИИ-анализ файлов")
-            ai_stats = await _run_ai_analysis(job_id, project, limit, 0.25, 0.55)
+            ai_stats = await _run_ai_analysis(
+                job_id, project, limit, 0.25, 0.55, retry_errors=bool(params.get("retry_errors"))
+            )
+            runner.check_cancelled(job_id)
             if ai_stats["analyzed"] > 0 or not project.meta.get("overview"):
                 await runner.report(job_id, 0.85, "Синтез обзора проекта")
                 overview = await _run_synthesis(project)
@@ -356,7 +387,31 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         except Exception:
             log.exception("Не удалось перегенерировать плагин")
 
-        return {"scan": diff.stats, "ai": ai_stats, "mode": mode}
+        stats: dict = {"scan": diff.stats, "ai": ai_stats, "mode": mode}
+        # очередь анализа: пока в бэклоге есть файлы и прогресс идёт — продолжаем сами
+        if (
+            params.get("auto_continue")
+            and s.ai_analysis_enabled
+            and params.get("ai", True)
+            and limit > 0
+            and ai_stats.get("pending_left", 0) > 0
+            and ai_stats.get("analyzed", 0) > 0
+        ):
+            await runner.submit(
+                project_id,
+                "index",
+                {"mode": "update", "ai_limit": limit, "auto_continue": True},
+            )
+            stats["auto_continued"] = True
+            log.info(
+                "Автопродолжение анализа %s: в бэклоге осталось %d файлов",
+                project_id,
+                ai_stats["pending_left"],
+            )
+        return stats
+    except JobCancelled:
+        await _set_project(project_id, status="ready")
+        raise
     except Exception:
         await _set_project(project_id, status="error")
         raise
@@ -418,6 +473,8 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
 
     async def check(task: TaskItem) -> None:
         nonlocal done_cnt, partial_cnt, checked
+        if runner.is_cancelled(job_id):
+            return
         prompt = TASK_VERIFY_PROMPT.format(
             project_name=project.name,
             project_context=context,
@@ -464,4 +521,5 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
         await runner.report(job_id, min(0.95, checked / max(1, len(tasks))), f"Проверено задач: {checked}/{len(tasks)}")
 
     await asyncio.gather(*(check(t) for t in tasks))
+    runner.check_cancelled(job_id)
     return {"checked": checked, "done": done_cnt, "partial": partial_cnt, "total": len(tasks)}

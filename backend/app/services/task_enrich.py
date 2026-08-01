@@ -166,6 +166,8 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
 
     async def run_one(t: TaskItem) -> None:
         nonlocal done, errors
+        if runner.is_cancelled(job_id):
+            return
         async with sem:
             try:
                 await enrich_one(project, t)
@@ -180,4 +182,5 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
         )
 
     await asyncio.gather(*(run_one(t) for t in tasks))
+    runner.check_cancelled(job_id)
     return {"enriched": done, "errors": errors, "total": len(tasks)}

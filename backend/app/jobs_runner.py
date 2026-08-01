@@ -18,6 +18,10 @@ log = logging.getLogger("projectai.jobs")
 JobHandler = Callable[[uuid.UUID, uuid.UUID, dict], Awaitable[dict]]
 
 
+class JobCancelled(Exception):
+    """Задача отменена пользователем — хендлер прерывает работу."""
+
+
 class JobRunner:
     """Встроенный асинхронный исполнитель фоновых задач с персистентностью в Postgres.
 
@@ -33,6 +37,8 @@ class JobRunner:
         self._running = False
         # SSE-подписчики: project_id -> очереди событий
         self._subscribers: dict[uuid.UUID, set[asyncio.Queue]] = {}
+        # запрошенные отмены выполняющихся задач
+        self._cancel_requested: set[uuid.UUID] = set()
 
     def register(self, job_type: str, handler: JobHandler) -> None:
         self._handlers[job_type] = handler
@@ -102,6 +108,37 @@ class JobRunner:
         await self._publish_job(job.id)
         return job
 
+    async def cancel(self, job_id: uuid.UUID) -> str | None:
+        """Отмена: queued помечается сразу, running получает флаг —
+        хендлер проверяет его между батчами через check_cancelled()."""
+        async with get_sessionmaker()() as session:
+            job = await session.get(Job, job_id)
+            if job is None:
+                return None
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.detail = "Отменено пользователем"
+                job.finished_at = utcnow()
+                await session.commit()
+                await self._publish_job(job_id)
+                return "cancelled"
+            if job.status == "running":
+                self._cancel_requested.add(job_id)
+                await session.execute(
+                    update(Job).where(Job.id == job_id).values(detail="Отменяется…")
+                )
+                await session.commit()
+                await self._publish_job(job_id)
+                return "cancelling"
+        return None
+
+    def is_cancelled(self, job_id: uuid.UUID) -> bool:
+        return job_id in self._cancel_requested
+
+    def check_cancelled(self, job_id: uuid.UUID) -> None:
+        if job_id in self._cancel_requested:
+            raise JobCancelled()
+
     async def has_active(self, project_id: uuid.UUID, types: list[str] | None = None) -> bool:
         async with get_sessionmaker()() as session:
             q = select(Job.id).where(
@@ -147,6 +184,15 @@ class JobRunner:
                     .values(status="done", progress=1.0, stats=stats or {}, finished_at=utcnow(), detail="")
                 )
                 await session.commit()
+        except JobCancelled:
+            log.info("Задача %s (%s) отменена пользователем", job_id, job_type)
+            async with maker() as session:
+                await session.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(status="cancelled", detail="Отменено пользователем", finished_at=utcnow())
+                )
+                await session.commit()
         except Exception as e:
             log.exception("Задача %s (%s) упала", job_id, job_type)
             async with maker() as session:
@@ -160,6 +206,8 @@ class JobRunner:
                     )
                 )
                 await session.commit()
+        finally:
+            self._cancel_requested.discard(job_id)
         await self._publish_job(job_id)
 
     async def report(self, job_id: uuid.UUID, progress: float, detail: str = "", stats: dict | None = None) -> None:
