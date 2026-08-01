@@ -20,6 +20,10 @@ charset-normalizer>=3.3
 pathspec>=0.12
 # наблюдение за каталогом проекта (авто-индекс при изменениях)
 watchdog>=4.0
+# векторный поиск: Qdrant + локальные эмбеддинги (ONNX, без API-затрат)
+# версия клиента держится рядом с версией сервера из docker-compose
+qdrant-client>=1.14,<1.17
+fastembed>=0.5
 # транскрибация (GPU/CPU)
 faster-whisper>=1.0
 # tests

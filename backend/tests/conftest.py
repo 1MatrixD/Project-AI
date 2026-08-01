@@ -49,6 +49,9 @@ os.environ.update(
         "AI_CONCURRENCY": "2",
         "CLAUDE_TIMEOUT_SEC": "60",
         "WATCH_DEBOUNCE_SEC": "0.5",
+        # векторный поиск: отдельная коллекция + фейковый эмбеддер (без модели)
+        "QDRANT_COLLECTION": "projectai_test",
+        "EMBED_FAKE": "1",
     }
 )
 
@@ -85,6 +88,15 @@ async def client():
         await graphdb.ensure_constraints()
     except Exception:
         pass
+    # свежая тестовая коллекция векторов (размерность фейкового эмбеддера)
+    from app.services import vectors as vectors_svc
+
+    try:
+        qc = vectors_svc.get_client()
+        if await qc.collection_exists("projectai_test"):
+            await qc.delete_collection("projectai_test")
+    except Exception:
+        pass
     runner.register("index", indexer.index_project)
     runner.register("knowledge_update", indexer.knowledge_update)
     runner.register("verify_tasks", indexer.verify_tasks)
@@ -104,6 +116,7 @@ async def client():
     watcher.shutdown()
     await runner.stop()
     await graphdb.close_driver()
+    await vectors_svc.close_client()
 
 
 @pytest_asyncio.fixture

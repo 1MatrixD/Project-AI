@@ -58,4 +58,10 @@ async def add_decision(
         )
     except Exception:
         log.warning("Decision-узел не записался в граф", exc_info=True)
+    from . import vectors
+
+    await vectors.upsert(
+        str(project_id),
+        [{"kind": "decision", "key": str(decision.id), "title": decision.topic, "text": decision.text}],
+    )
     return decision

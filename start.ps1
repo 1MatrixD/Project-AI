@@ -12,7 +12,7 @@ function Test-PortBusy([int]$Port) {
     return $null -ne (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
-Write-Host "[1/4] Инфраструктура (Postgres 5432, Neo4j 7474/7687)…" -ForegroundColor Cyan
+Write-Host "[1/4] Инфраструктура (Postgres 5432, Neo4j 7474/7687, Qdrant 6333)…" -ForegroundColor Cyan
 docker compose -f "$root\docker-compose.yml" up -d
 
 # --- бутстрап при первом запуске ---

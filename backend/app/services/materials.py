@@ -190,6 +190,19 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
         await graphdb.upsert_document(
             str(project_id), str(material_id), material.filename, dtype, summary or text[:1000], []
         )
+        from . import vectors
+
+        await vectors.upsert(
+            str(project_id),
+            [
+                {
+                    "kind": "doc",
+                    "key": str(material_id),
+                    "title": material.filename,
+                    "text": summary or text[:1000],
+                }
+            ],
+        )
 
         async with maker() as session:
             await session.execute(

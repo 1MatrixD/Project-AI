@@ -25,7 +25,7 @@ from ..schemas import (
     ProjectUpdate,
 )
 from ..security import create_service_token
-from ..services import graphdb, plugin_gen, rlm
+from ..services import graphdb, plugin_gen, rlm, vectors
 
 log = logging.getLogger("projectai.api.projects")
 
@@ -109,6 +109,7 @@ async def delete_project(
     project: Project = Depends(get_project), session: AsyncSession = Depends(get_session)
 ) -> None:
     await graphdb.delete_project_graph(str(project.id))
+    await vectors.delete(str(project.id))
     await session.execute(delete(Project).where(Project.id == project.id))
     await session.commit()
     s = get_settings()
@@ -188,10 +189,48 @@ async def graph_view(project: Project = Depends(get_project), limit: int = 400) 
 async def graph_search(
     q: str, project: Project = Depends(get_project), limit: int = 15
 ) -> list[dict]:
+    """Гибридный поиск по знаниям: fulltext по графу Neo4j + семантика (Qdrant).
+
+    Каждый хит несёт match: fulltext | semantic | both. Семантика находит
+    смысловые совпадения без точного вхождения слов (эмбеддинги)."""
+    pid = str(project.id)
+    limit = min(limit, 50)
+    fulltext: list[dict] = []
+    ft_error: Exception | None = None
     try:
-        return await graphdb.fulltext_search(str(project.id), q, min(limit, 50))
+        fulltext = await graphdb.fulltext_search(pid, q, limit)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Поиск по графу недоступен: {e}")
+        ft_error = e
+        log.warning("Fulltext-поиск упал, остаётся семантика: %s", e)
+    semantic = await vectors.search(pid, q, limit=limit)
+    if ft_error is not None and not semantic:
+        raise HTTPException(status_code=502, detail=f"Поиск по графу недоступен: {ft_error}")
+
+    out: list[dict] = []
+    seen: dict[str, dict] = {}
+    for hit in fulltext:
+        hit["match"] = "fulltext"
+        ident = str(hit.get("path") or hit.get("title") or hit.get("name") or id(hit))
+        seen[ident] = hit
+        out.append(hit)
+    for sh in semantic:
+        ident = sh["key"] if sh["kind"] == "file" else sh["title"]
+        if ident in seen:
+            seen[ident]["match"] = "both"
+            continue
+        shaped: dict = {
+            "labels": [vectors.KIND_LABELS.get(sh["kind"], sh["kind"])],
+            "score": sh["score"],
+            "summary": sh["text"],
+            "match": "semantic",
+        }
+        if sh["kind"] == "file":
+            shaped["path"] = sh["key"]
+            shaped["name"] = sh["key"].rsplit("/", 1)[-1]
+        else:
+            shaped["title"] = sh["title"]
+        out.append(shaped)
+    return out[: limit + 10]
 
 
 @router.get("/{project_id}/graph/component")

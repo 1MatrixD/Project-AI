@@ -12,7 +12,7 @@ from ..config import get_settings
 from ..db import get_sessionmaker
 from ..jobs_runner import JobCancelled, runner
 from ..models import ChangeReport, Project, ProjectFile, TaskItem, WorkLogEntry, utcnow
-from . import claude_cli, graphdb
+from . import claude_cli, graphdb, vectors
 from .prompts import (
     FILE_ANALYSIS_PROMPT,
     FILE_ANALYSIS_SYSTEM,
@@ -176,6 +176,7 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     by_path = {str(i.get("path", "")).replace("\\", "/"): i for i in items if isinstance(i, dict)}
     analyzed = 0
     pid = str(project.id)
+    vector_docs: list[dict] = []
     async with get_sessionmaker()() as session:
         for f in batch:
             item = by_path.get(f.rel_path)
@@ -196,8 +197,20 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
                     summary=(role + ". " + summary).strip(". ")[:4000],
                 )
             )
+            entity_names = ", ".join(
+                str(e.get("name", "")) for e in (item.get("entities") or [])[:20] if isinstance(e, dict)
+            )
+            vector_docs.append(
+                {
+                    "kind": "file",
+                    "key": f.rel_path,
+                    "title": f.rel_path,
+                    "text": f"{role}. {summary}" + (f"\nСущности: {entity_names}" if entity_names else ""),
+                }
+            )
             analyzed += 1
         await session.commit()
+    await vectors.upsert(pid, vector_docs)
     return {
         "analyzed": analyzed,
         "errors": len(batch) - analyzed,
@@ -322,6 +335,8 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
 
         await runner.report(job_id, 0.12, "Обновление реестра файлов")
         await _apply_scan_to_db(project_id, diff)
+        if diff.deleted:
+            await vectors.delete(str(project_id), kind="file", keys=diff.deleted)
         if mode == "reverify":
             async with get_sessionmaker()() as session:
                 await session.execute(

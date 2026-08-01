@@ -10,7 +10,7 @@ from ..db import get_session
 from ..deps import get_project
 from ..models import Decision, Project
 from ..schemas import DecisionIn, DecisionOut, DecisionUpdateIn
-from ..services import graphdb
+from ..services import graphdb, vectors
 from ..services.decisions import add_decision
 
 router = APIRouter(prefix="/projects/{project_id}/decisions", tags=["decisions"])
@@ -59,6 +59,10 @@ async def update_decision(
         )
     except Exception:
         pass
+    await vectors.upsert(
+        str(project.id),
+        [{"kind": "decision", "key": str(decision.id), "title": decision.topic, "text": decision.text}],
+    )
     return DecisionOut.model_validate(decision)
 
 
@@ -77,3 +81,4 @@ async def delete_decision(
         await graphdb.delete_decision_node(str(project.id), str(decision_id))
     except Exception:
         pass
+    await vectors.delete(str(project.id), kind="decision", keys=[str(decision_id)])

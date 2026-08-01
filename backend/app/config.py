@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "neo4j"
 
+    # векторный поиск (Qdrant + локальные эмбеддинги fastembed)
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection: str = "projectai_knowledge"
+    embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embed_fake: bool = False  # тесты: детерминированный эмбеддер без скачивания модели
+
     api_port: int = 8010
     jwt_secret: str = "dev-secret"
     jwt_ttl_hours: int = 24 * 14

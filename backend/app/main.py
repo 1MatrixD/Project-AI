@@ -11,7 +11,7 @@ from .config import get_settings
 from .db import init_db
 from .jobs_runner import runner
 from .routers import auth, chats, decisions, files, fs, jobs, materials, projects, tasks
-from .services import git_import, graphdb, indexer, planner, task_enrich
+from .services import git_import, graphdb, indexer, planner, task_enrich, vectors
 from .services.materials import process_material
 from .services.plugin_gen import plugin_generate_job
 from .services.watcher import watcher
@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
     watcher.shutdown()
     await runner.stop()
     await graphdb.close_driver()
+    await vectors.close_client()
 
 
 app = FastAPI(title="Проекты ИИ", version="0.1.0", lifespan=lifespan)
