@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply min-h-screen bg-slate-50 font-sans text-slate-900;
+  }
+
+  /* Нативный datetime-local в Chrome прижимает иконку календаря к краю — выравниваем */
+  input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    @apply cursor-pointer opacity-60 hover:opacity-100;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-slate-200 bg-white shadow-card;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
+      transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 focus:outline-none
+      focus:ring-2 focus:ring-brand-300;
+  }
+
+  .btn-ghost {
+    @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+  }
+
+  .btn-danger {
+    @apply btn border border-red-200 bg-white text-red-600 hover:bg-red-50;
+  }
+
+  .chip {
+    @apply rounded-full border border-slate-200 bg-white px-3 py-1 text-sm text-slate-600
+      transition-colors hover:border-brand-300 hover:text-brand-700;
+  }
+
+  .chip-active {
+    @apply border-brand-600 bg-brand-600 text-white hover:border-brand-600 hover:text-white;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm
+      placeholder:text-slate-400 focus:border-brand-500 focus:outline-none
+      focus:ring-2 focus:ring-brand-100;
+  }
+
+  .field-invalid {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-100;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500;
+  }
+
+  .skeleton {
+    @apply animate-pulse-soft rounded-lg bg-slate-200;
+  }
+
+  /* Строка расшифровки цены: название слева, сумма справа, точки между ними */
+  .price-row {
+    @apply flex items-baseline justify-between gap-3 py-1.5 text-sm;
+  }
+
+  .price-total {
+    @apply flex items-baseline justify-between border-t border-slate-200 pt-3 text-base font-semibold;
+  }
+}

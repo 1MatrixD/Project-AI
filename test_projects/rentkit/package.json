@@ -1,0 +1,53 @@
+{
+  "name": "rentkit",
+  "version": "1.4.0",
+  "private": true,
+  "description": "RentKit — прокат фото/видео техники: ядро правил, API и веб-кабинет",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.9.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:api": "npm run dev --workspace @rentkit/api",
+    "dev:web": "npm run dev --workspace @rentkit/web",
+    "build": "npm run build --workspace @rentkit/core && npm run build --workspaces --if-present",
+    "lint": "eslint \"packages/*/src/**/*.ts\" \"apps/*/src/**/*.{ts,tsx}\"",
+    "lint:fix": "npm run lint -- --fix",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc -b packages/core apps/api",
+    "db:schema": "psql \"$DATABASE_URL\" -f apps/api/src/db/schema.sql",
+    "clean": "rimraf packages/*/dist apps/*/dist coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^7.4.0",
+    "@typescript-eslint/parser": "^7.4.0",
+    "eslint": "^8.57.0",
+    "rimraf": "^5.0.5",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.3",
+    "vitest": "^1.4.0"
+  },
+  "eslintConfig": {
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "plugins": ["@typescript-eslint"],
+    "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+    "env": {
+      "node": true,
+      "es2022": true
+    },
+    "rules": {
+      "no-console": "off",
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/explicit-module-boundary-types": "off"
+    },
+    "ignorePatterns": ["dist", "coverage", "node_modules"]
+  }
+}

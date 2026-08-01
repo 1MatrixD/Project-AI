@@ -1,0 +1,58 @@
+# Локальный запуск «Скорохода» — посмотреть, что за сервисы.
+#
+#   docker compose up -d --build
+#   http://localhost:8020/docs   — Swagger API (заказы, зоны, промо, смены, вебхуки)
+#   http://localhost:3020        — витрина
+#   docker compose down -v       — снести вместе с базой
+#
+# Порты намеренно разведены с основным стендом «Проектов ИИ» (5432/8010/3010).
+name: skorohod
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: skorohod
+      POSTGRES_PASSWORD: skorohod
+      POSTGRES_DB: skorohod
+    ports:
+      - "5442:5432"
+    volumes:
+      - skorohod_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skorohod -d skorohod"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./skorohod-api
+    environment:
+      DATABASE_URL: postgresql+psycopg://skorohod:skorohod@db:5432/skorohod
+      JWT_SECRET: dev-secret
+      PAYMENTS_API_KEY: test_dev
+      PAYMENTS_WEBHOOK_SECRET: dev-webhook
+      SMS_TOKEN: dev-sms
+      CORS_ORIGIN: http://localhost:3020
+      SURGE_ENABLED: "1"
+    ports:
+      - "8020:8020"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Схема раскатывается из моделей, потом грузятся демо-данные (идемпотентно).
+    command: >
+      sh -c "python -m scripts.init_db &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8020"
+
+  web:
+    build: ./skorohod-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8020
+    ports:
+      - "3020:3020"
+    depends_on:
+      - api
+
+volumes:
+  skorohod_db:

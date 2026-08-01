@@ -1,0 +1,32 @@
+# зависимости
+node_modules/
+.pnp
+.pnp.js
+
+# сборка next
+.next/
+out/
+build/
+next-env.d.ts
+
+# окружение
+.env*.local
+.env.local
+
+# логи
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# редакторы и ОС
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# прочее
+coverage/
+*.tsbuildinfo
+.eslintcache

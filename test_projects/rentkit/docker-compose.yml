@@ -1,0 +1,59 @@
+# Локальный запуск RentKit — посмотреть, что за сервисы.
+#
+#   docker compose up -d --build
+#   http://localhost:8030/api/health   — API (каталог, брони, возвраты, депозиты, отчёты)
+#   http://localhost:5173              — витрина проката
+#   docker compose down -v             — снести вместе с базой
+#
+# Порты разведены с основным стендом «Проектов ИИ» (5432/8010/3010).
+name: rentkit
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rentkit
+      POSTGRES_PASSWORD: rentkit
+      POSTGRES_DB: rentkit
+    ports:
+      - "5443:5432"
+    volumes:
+      - rentkit_db:/var/lib/postgresql/data
+      # Postgres сам прогоняет эти файлы по алфавиту при первом старте тома.
+      - ./apps/api/src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./apps/api/src/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rentkit -d rentkit"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: npm run dev:api
+    environment:
+      NODE_ENV: development
+      PORT: "8030"
+      DATABASE_URL: postgres://rentkit:rentkit@db:5432/rentkit
+      JWT_SECRET: dev-secret
+      PAYMENTS_KEY: dev-payments
+      CORS_ORIGINS: http://localhost:5173
+      LOG_LEVEL: debug
+    ports:
+      - "8030:8030"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: .
+    command: npm run dev:web
+    environment:
+      VITE_API_URL: http://localhost:8030
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  rentkit_db:

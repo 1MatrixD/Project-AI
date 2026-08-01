@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-inter: 'Inter', system-ui, sans-serif;
+  --header-h: 56px;
+}
+
+html,
+body {
+  @apply bg-surface text-ink-900 antialiased;
+}
+
+/* Общие классы, чтобы не плодить длинные цепочки утилит в разметке. */
+@layer components {
+  .skh-card {
+    @apply rounded-card bg-white shadow-card border border-black/5;
+  }
+
+  .skh-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+           text-sm font-medium transition-colors disabled:opacity-50
+           disabled:cursor-not-allowed;
+  }
+
+  .skh-btn-primary {
+    @apply skh-btn bg-brand-500 text-white hover:bg-brand-600;
+  }
+
+  .skh-btn-ghost {
+    @apply skh-btn border border-black/10 bg-white text-ink-600 hover:bg-brand-50;
+  }
+
+  .skh-input {
+    @apply w-full rounded-lg border border-black/10 px-3 py-2 text-sm
+           outline-none placeholder:text-ink-400 focus:border-brand-500;
+  }
+
+  .skh-label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-ink-400;
+  }
+
+  /* Скелетон для списков, пока грузим данные с API. */
+  .skh-skeleton {
+    @apply animate-pulse rounded-md bg-black/5;
+  }
+}
+
+/* Таблицы админки: узкие ячейки, моноширинные числа. */
+.skh-table td,
+.skh-table th {
+  @apply border-b border-black/5 px-3 py-2 text-left text-sm;
+}
+
+.skh-table td.num {
+  @apply text-right tabular-nums;
+}

@@ -1,0 +1,39 @@
+# зависимости
+node_modules/
+.npm/
+.pnpm-store/
+
+# сборка
+dist/
+build/
+*.tsbuildinfo
+
+# окружение и секреты
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# тесты и покрытие
+coverage/
+.nyc_output/
+*.lcov
+
+# логи
+logs/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# редакторы и ОС
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# временное
+tmp/
+.cache/
+*.pid
+*.seed
