@@ -55,25 +55,10 @@ export type SseEvent = {
   input?: string;
   detail?: string;
   meta?: Record<string, unknown>;
+  job?: { id: string; type: string; status: string; progress: number };
 };
 
-/** POST + чтение SSE-стрима (fetch, т.к. EventSource не умеет POST). */
-export async function streamSse(
-  path: string,
-  body: unknown,
-  onEvent: (e: SseEvent) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  const token = getToken();
-  const res = await fetch(`${API_URL}/api${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+async function readSseBody(res: Response, onEvent: (e: SseEvent) => void): Promise<void> {
   if (!res.ok || !res.body) {
     let detail = res.statusText;
     try {
@@ -100,6 +85,40 @@ export async function streamSse(
       }
     }
   }
+}
+
+/** POST + чтение SSE-стрима (fetch, т.к. EventSource не умеет POST). */
+export async function streamSse(
+  path: string,
+  body: unknown,
+  onEvent: (e: SseEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}/api${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  await readSseBody(res, onEvent);
+}
+
+/** GET SSE-поток событий (fetch вместо EventSource — нужен заголовок Authorization). */
+export async function streamEvents(
+  path: string,
+  onEvent: (e: SseEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  });
+  await readSseBody(res, onEvent);
 }
 
 export function fmtDate(iso: string): string {

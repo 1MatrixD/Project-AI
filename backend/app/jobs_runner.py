@@ -31,9 +31,43 @@ class JobRunner:
         self._workers: list[asyncio.Task] = []
         self._concurrency = concurrency
         self._running = False
+        # SSE-подписчики: project_id -> очереди событий
+        self._subscribers: dict[uuid.UUID, set[asyncio.Queue]] = {}
 
     def register(self, job_type: str, handler: JobHandler) -> None:
         self._handlers[job_type] = handler
+
+    # --- события (SSE) ---
+
+    def subscribe(self, project_id: uuid.UUID) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=200)
+        self._subscribers.setdefault(project_id, set()).add(q)
+        return q
+
+    def unsubscribe(self, project_id: uuid.UUID, q: asyncio.Queue) -> None:
+        subs = self._subscribers.get(project_id)
+        if subs is not None:
+            subs.discard(q)
+            if not subs:
+                self._subscribers.pop(project_id, None)
+
+    def publish(self, project_id: uuid.UUID, event: dict) -> None:
+        for q in self._subscribers.get(project_id, ()):  # медленный подписчик теряет события
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+    async def _publish_job(self, job_id: uuid.UUID) -> None:
+        from .schemas import JobOut
+
+        async with get_sessionmaker()() as session:
+            job = await session.get(Job, job_id)
+        if job is not None:
+            self.publish(
+                job.project_id,
+                {"type": "job", "job": JobOut.model_validate(job).model_dump(mode="json")},
+            )
 
     async def start(self) -> None:
         if self._running:
@@ -65,6 +99,7 @@ class JobRunner:
             await session.commit()
             await session.refresh(job)
         await self._queue.put(job.id)
+        await self._publish_job(job.id)
         return job
 
     async def has_active(self, project_id: uuid.UUID, types: list[str] | None = None) -> bool:
@@ -100,6 +135,7 @@ class JobRunner:
             job.started_at = utcnow()
             await session.commit()
             job_type, project_id, params = job.type, job.project_id, dict(job.params)
+        await self._publish_job(job_id)
 
         handler = self._handlers[job_type]
         try:
@@ -124,9 +160,9 @@ class JobRunner:
                     )
                 )
                 await session.commit()
+        await self._publish_job(job_id)
 
-    @staticmethod
-    async def report(job_id: uuid.UUID, progress: float, detail: str = "", stats: dict | None = None) -> None:
+    async def report(self, job_id: uuid.UUID, progress: float, detail: str = "", stats: dict | None = None) -> None:
         """Вызывается из хендлеров для обновления прогресса."""
         values: dict[str, Any] = {"progress": max(0.0, min(1.0, progress))}
         if detail:
@@ -136,6 +172,7 @@ class JobRunner:
         async with get_sessionmaker()() as session:
             await session.execute(update(Job).where(Job.id == job_id).values(**values))
             await session.commit()
+        await self._publish_job(job_id)
 
 
 runner = JobRunner()

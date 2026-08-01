@@ -50,6 +50,11 @@ async def _sync_task_node(project: Project, task: TaskItem, files: list[str] | N
         pass  # граф может быть недоступен — не валим API
 
 
+def _notify_tasks_changed(project: Project) -> None:
+    """SSE-событие для UI: доска изменилась (в т.ч. внешним MCP-плагином)."""
+    runner.publish(project.id, {"type": "tasks_changed"})
+
+
 @router.get("/tasks", response_model=list[TaskOut])
 async def list_tasks(
     project: Project = Depends(get_project),
@@ -82,6 +87,7 @@ async def create_task(
     await session.commit()
     await session.refresh(task)
     await _sync_task_node(project, task)
+    _notify_tasks_changed(project)
     if data.enrich:
         await runner.submit(project.id, "enrich_tasks", {"task_ids": [str(task.id)]})
     return TaskOut.model_validate(task)
@@ -112,6 +118,7 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
     await _sync_task_node(project, task)
+    _notify_tasks_changed(project)
     return TaskOut.model_validate(task)
 
 
@@ -135,6 +142,7 @@ async def reorder_tasks(
         if status == "done" and task.done_at is None:
             task.done_at = utcnow()
     await session.commit()
+    _notify_tasks_changed(project)
     return {"ok": True}
 
 
@@ -162,6 +170,7 @@ async def mark_done(
     await session.commit()
     await session.refresh(task)
     await _sync_task_node(project, task, [str(f) for f in data.files[:30]])
+    _notify_tasks_changed(project)
     if not await runner.has_active(project.id, ["index", "knowledge_update"]):
         await runner.submit(project.id, "knowledge_update", {})
     return TaskOut.model_validate(task)
@@ -176,6 +185,7 @@ async def delete_task(
     task = await _get_task(session, project, task_id)
     await session.delete(task)
     await session.commit()
+    _notify_tasks_changed(project)
 
 
 @router.post("/tasks/verify")

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import get_project
+from ..jobs_runner import runner
 from ..models import Job, Project
 from ..schemas import JobOut
 
@@ -27,6 +31,44 @@ async def list_jobs(
         .limit(min(limit, 100))
     )
     return [JobOut.model_validate(j) for j in res.scalars()]
+
+
+@router.get("/events")
+async def job_events(
+    request: Request, project: Project = Depends(get_project), lifetime: float | None = None
+) -> StreamingResponse:
+    """SSE-поток событий проекта: изменения фоновых задач и канбана.
+
+    События: {"type": "job", "job": {...}} | {"type": "tasks_changed"} | {"type": "ping"}.
+    Поток закрывается через `lifetime` секунд (по умолчанию 15 минут) —
+    клиент переподключается сам.
+    """
+    project_id = project.id
+    deadline = asyncio.get_event_loop().time() + max(1.0, min(lifetime or 900.0, 3600.0))
+
+    async def gen():
+        q = runner.subscribe(project_id)
+        try:
+            yield 'data: {"type": "hello"}\n\n'
+            while True:
+                timeout = min(15.0, deadline - asyncio.get_event_loop().time())
+                if timeout <= 0:
+                    return
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    event = {"type": "ping"}
+                if await request.is_disconnected():
+                    return
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        finally:
+            runner.unsubscribe(project_id, q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{job_id}", response_model=JobOut)

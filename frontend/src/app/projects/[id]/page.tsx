@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, streamEvents } from "@/lib/api";
 import type { Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import OverviewTab from "@/components/project/OverviewTab";
@@ -54,14 +54,47 @@ export default function ProjectPage() {
     }
   }, [id]);
 
+  // SSE-пуш событий проекта; редкий поллинг — только как резерв при обрыве стрима
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useEffect(() => {
     load();
+    let stopped = false;
+    const ctrl = new AbortController();
+    (async () => {
+      while (!stopped) {
+        try {
+          await streamEvents(
+            `/projects/${id}/jobs/events`,
+            (e) => {
+              if (e.type === "job") {
+                loadRef.current();
+                const st = e.job?.status;
+                if (st === "done" || st === "error" || st === "cancelled") {
+                  setRefreshTick((x) => x + 1);
+                }
+              } else if (e.type === "tasks_changed") {
+                setRefreshTick((x) => x + 1);
+              }
+            },
+            ctrl.signal
+          );
+        } catch {
+          /* обрыв/401 — переподключимся */
+        }
+        if (!stopped) await new Promise((r) => setTimeout(r, 3000));
+      }
+    })();
     const t = setInterval(() => {
-      load();
+      loadRef.current();
       setRefreshTick((x) => x + 1);
-    }, 3000);
-    return () => clearInterval(t);
-  }, [load]);
+    }, 20000);
+    return () => {
+      stopped = true;
+      ctrl.abort();
+      clearInterval(t);
+    };
+  }, [id, load]);
 
   const activeJobs = jobs.filter((j) => j.status === "running" || j.status === "queued");
 
