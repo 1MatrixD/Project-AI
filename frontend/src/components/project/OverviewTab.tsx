@@ -27,7 +27,26 @@ export default function OverviewTab({
   const [changes, setChanges] = useState<ChangeReport[]>([]);
   const [error, setError] = useState("");
   const [showGitImport, setShowGitImport] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true);
+
+  useEffect(() => {
+    setAutoContinue(localStorage.getItem("projectai_auto_continue") !== "0");
+  }, []);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMenu(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showMenu]);
+
+  function toggleAutoContinue(v: boolean) {
+    setAutoContinue(v);
+    localStorage.setItem("projectai_auto_continue", v ? "1" : "0");
+  }
   const overview = project.meta.overview;
   const stats = project.meta.stats;
   const graphStats = project.stats;
@@ -78,38 +97,67 @@ export default function OverviewTab({
         <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="font-medium">О проекте</div>
-            <div className="flex gap-2 flex-wrap items-center">
-              <label
-                className="flex items-center gap-1.5 text-xs text-[var(--muted)] cursor-pointer select-none"
-                title="После каждого прогона автоматически продолжать ИИ-анализ, пока бэклог не опустеет"
+            <div className="flex gap-1.5 items-center relative">
+              <button
+                className="btn btn-ghost text-sm"
+                title="Просканировать изменения и продолжить ИИ-анализ"
+                onClick={() => runIndex("update")}
               >
-                <input
-                  type="checkbox"
-                  checked={autoContinue}
-                  onChange={(e) => setAutoContinue(e.target.checked)}
-                />
-                до конца бэклога
-              </label>
-              <button className="btn btn-ghost text-sm" onClick={() => runIndex("update")}>
                 ⟳ Обновить индекс
               </button>
-              <button className="btn btn-ghost text-sm" onClick={() => runIndex("reverify")}>
-                ⟲ Перепроверить всё
-              </button>
               <button
-                className="btn btn-ghost text-sm"
-                title="Разобрать историю коммитов (включая вложенные репо) в задачи канбана"
-                onClick={() => setShowGitImport(true)}
+                className="btn btn-ghost text-sm px-2.5"
+                title="Ещё действия"
+                onClick={() => setShowMenu((v) => !v)}
               >
-                ⎇ Импорт из git
+                ⋯
               </button>
-              <button
-                className="btn btn-ghost text-sm"
-                title="Скачать карту знаний одним markdown-файлом"
-                onClick={downloadExport}
-              >
-                ⬇ Экспорт .md
-              </button>
+              {showMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 z-40 card p-1.5 w-72 shadow-xl space-y-0.5">
+                    <label
+                      className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer select-none"
+                      title="Иначе за один прогон анализируется ограниченная порция файлов"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 accent-[var(--accent)]"
+                        checked={autoContinue}
+                        onChange={(e) => toggleAutoContinue(e.target.checked)}
+                      />
+                      <span className="text-sm">
+                        Анализ до конца бэклога
+                        <span className="block text-[11px] text-[var(--muted)]">
+                          продолжать порциями, пока все файлы не проанализированы
+                        </span>
+                      </span>
+                    </label>
+                    <div className="border-t border-[var(--border)] my-1" />
+                    <button
+                      className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                      onClick={() => { setShowMenu(false); runIndex("reverify"); }}
+                    >
+                      ⟲ Перепроверить всё
+                      <span className="block text-[11px] text-[var(--muted)]">полный пере-анализ всех файлов ИИ</span>
+                    </button>
+                    <button
+                      className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                      onClick={() => { setShowMenu(false); setShowGitImport(true); }}
+                    >
+                      ⎇ Импорт из git
+                      <span className="block text-[11px] text-[var(--muted)]">история коммитов → задачи канбана</span>
+                    </button>
+                    <button
+                      className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                      onClick={() => { setShowMenu(false); downloadExport(); }}
+                    >
+                      ⬇ Экспорт карты знаний
+                      <span className="block text-[11px] text-[var(--muted)]">скачать одним markdown-файлом</span>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
           {error && <div className="text-sm text-red-400">{error}</div>}
@@ -486,9 +534,12 @@ function DecisionsCard({ projectId }: { projectId: string }) {
           {showAdd ? "✕" : "+ Добавить"}
         </button>
       </div>
-      <div className="text-xs text-[var(--muted)]">
-        Актуальные решения и смены подходов («раньше X, теперь Y»). ИИ сверяется с ними в
-        проработке и проверках — код, противоречащий соглашению, считается легаси, а не багом.
+      <div className="text-xs text-[var(--muted)] leading-relaxed">
+        Память о том, «как в проекте принято сейчас», — когда подход менялся со временем.
+        Пример: «роль ORGANIZER упразднена, теперь MANAGER + права». Без такой заметки ИИ
+        найдёт в коде остатки старого подхода и назовёт их багом; с ней — поймёт, что это
+        осознанное решение. ИИ сверяется с соглашениями при проработке задач, проверках и
+        git-импорте. Пополняются вручную, из созвонов (автоматически) и через чат.
       </div>
       {showAdd && (
         <form onSubmit={add} className="space-y-2">
