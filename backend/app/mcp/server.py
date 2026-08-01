@@ -21,6 +21,9 @@ except ImportError:  # mcp SDK 1.x
 API_URL = os.environ.get("PROJECTAI_API_URL", "http://localhost:8010").rstrip("/")
 TOKEN = os.environ.get("PROJECTAI_TOKEN", "")
 PROJECT_ID = os.environ.get("PROJECTAI_PROJECT_ID", "")
+# chat — чат приложения; plugin — внешний Claude Code (технические инструменты
+# по умолчанию отключены, настраивается на вкладке «Плагин»)
+SURFACE = os.environ.get("PROJECTAI_SURFACE", "plugin")
 
 mcp = MCPServer(
     "projectai",
@@ -220,9 +223,38 @@ async def request_reindex(mode: str = "update") -> str:
     return _fmt(await _post(f"{P}/index", {"mode": mode}))
 
 
+def _apply_tool_access() -> None:
+    """Скрывает инструменты, выключенные для этой поверхности в настройках проекта."""
+    try:
+        with httpx.Client(
+            base_url=f"{API_URL}/api",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            timeout=10.0,
+        ) as c:
+            r = c.get(f"{P}/tool-access", params={"surface": SURFACE})
+            r.raise_for_status()
+            allowed = set(r.json().get("allowed_tools") or [])
+    except Exception:
+        return  # API недоступен — оставляем все инструменты (границу решает бэкенд)
+    if not allowed:
+        return
+    for tool_name in [
+        "project_overview", "graph_search", "graph_cypher", "component_info", "file_info",
+        "list_files", "list_documents", "read_document", "rlm_query", "task_list",
+        "task_create", "task_update", "task_move", "task_done", "task_enrich", "log_work",
+        "list_decisions", "record_decision", "request_reindex", "git_import",
+    ]:
+        if tool_name not in allowed:
+            try:
+                mcp.remove_tool(tool_name)
+            except Exception:
+                pass
+
+
 def main() -> None:
     if not (TOKEN and PROJECT_ID):
         raise SystemExit("PROJECTAI_TOKEN и PROJECTAI_PROJECT_ID обязательны")
+    _apply_tool_access()
     mcp.run()
 
 

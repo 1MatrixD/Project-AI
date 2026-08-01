@@ -26,7 +26,7 @@ def slugify(name: str) -> str:
     return slug.translate(table)[:60]
 
 
-def _mcp_server_config(project: Project, token: str) -> dict:
+def _mcp_server_config(project: Project, token: str, surface: str = "plugin") -> dict:
     s = get_settings()
     return {
         "command": sys.executable,
@@ -35,6 +35,7 @@ def _mcp_server_config(project: Project, token: str) -> dict:
             "PROJECTAI_API_URL": f"http://localhost:{s.api_port}",
             "PROJECTAI_TOKEN": token,
             "PROJECTAI_PROJECT_ID": str(project.id),
+            "PROJECTAI_SURFACE": surface,
             "PYTHONPATH": str(BACKEND_ROOT),
             "PYTHONIOENCODING": "utf-8",
         },
@@ -62,7 +63,7 @@ def write_chat_mcp_config(project: Project, token: str) -> str:
     d = s.data_path / "mcp"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{project.id}.json"
-    config = {"mcpServers": {"projectai": _mcp_server_config(project, token)}}
+    config = {"mcpServers": {"projectai": _mcp_server_config(project, token, surface="chat")}}
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
 
@@ -117,7 +118,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
 
     (plugin_dir / ".mcp.json").write_text(
         json.dumps(
-            {"projectai": _mcp_server_config(project, token)},
+            {"projectai": _mcp_server_config(project, token, surface="plugin")},
             ensure_ascii=False,
             indent=2,
         ),

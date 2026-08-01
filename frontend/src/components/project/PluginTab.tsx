@@ -86,6 +86,8 @@ export default function PluginTab({ projectId }: { projectId: string }) {
         </div>
       </div>
 
+      <ToolAccessCard projectId={projectId} />
+
       <div className="card p-5 space-y-3">
         <div className="font-medium">Установка</div>
         <ol className="text-sm space-y-3 list-decimal list-inside">
@@ -115,6 +117,81 @@ export default function PluginTab({ projectId }: { projectId: string }) {
           onClose={() => setBrowserOpen(null)}
         />
       )}
+    </div>
+  );
+}
+
+type ToolAccess = {
+  access: Record<string, Record<string, boolean>>;
+  labels: Record<string, string>;
+  groups: Record<string, string[]>;
+};
+
+/** Разграничение инструментов: чат приложения vs внешний плагин Claude Code. */
+function ToolAccessCard({ projectId }: { projectId: string }) {
+  const [data, setData] = useState<ToolAccess | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api<ToolAccess>(`/projects/${projectId}/tool-access`).then(setData).catch(() => {});
+  }, [projectId]);
+
+  async function toggle(surface: string, group: string) {
+    if (!data) return;
+    const access = {
+      ...data.access,
+      [surface]: { ...data.access[surface], [group]: !data.access[surface][group] },
+    };
+    setData({ ...data, access });
+    await api(`/projects/${projectId}/tool-access`, {
+      method: "PUT",
+      body: JSON.stringify(access),
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
+
+  if (!data) return null;
+  const groups = Object.keys(data.labels);
+
+  return (
+    <div className="card p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="font-medium">Доступ к инструментам</div>
+        {saved && <span className="text-xs text-emerald-300">✓ сохранено</span>}
+      </div>
+      <p className="text-xs text-[var(--muted)] leading-relaxed">
+        Что доступно ИИ в чате приложения и внешнему Claude Code через плагин. Технические
+        операции (реиндексация, git-импорт) у плагина по умолчанию выключены — внешний ИИ
+        работает над проектом, а не управляет системой. Применяется при следующем запуске
+        сессии ИИ.
+      </p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs text-[var(--muted)] text-left">
+            <th className="py-1.5 font-normal">Группа инструментов</th>
+            <th className="py-1.5 font-normal text-center w-28">Чат</th>
+            <th className="py-1.5 font-normal text-center w-28">Плагин</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--border)]">
+          {groups.map((g) => (
+            <tr key={g}>
+              <td className="py-2 pr-2">{data.labels[g]}</td>
+              {(["chat", "plugin"] as const).map((surface) => (
+                <td key={surface} className="py-2 text-center">
+                  <input
+                    type="checkbox"
+                    className="accent-[var(--accent)] w-4 h-4 cursor-pointer"
+                    checked={data.access[surface]?.[g] ?? true}
+                    onChange={() => toggle(surface, g)}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

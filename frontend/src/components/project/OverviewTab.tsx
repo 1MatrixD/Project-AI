@@ -26,6 +26,7 @@ export default function OverviewTab({
 }) {
   const [changes, setChanges] = useState<ChangeReport[]>([]);
   const [error, setError] = useState("");
+  const [showGitImport, setShowGitImport] = useState(false);
   const overview = project.meta.overview;
   const stats = project.meta.stats;
   const graphStats = project.stats;
@@ -66,15 +67,7 @@ export default function OverviewTab({
               <button
                 className="btn btn-ghost text-sm"
                 title="Разобрать историю коммитов (включая вложенные репо) в задачи канбана"
-                onClick={async () => {
-                  setError("");
-                  try {
-                    await api(`/projects/${project.id}/git/import`, { method: "POST" });
-                    onAction();
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : "Ошибка");
-                  }
-                }}
+                onClick={() => setShowGitImport(true)}
               >
                 ⎇ Импорт из git
               </button>
@@ -190,6 +183,103 @@ export default function OverviewTab({
               </div>
             ))
           )}
+        </div>
+      </div>
+
+      {showGitImport && (
+        <GitImportModal
+          projectId={project.id}
+          onClose={() => setShowGitImport(false)}
+          onStarted={() => {
+            setShowGitImport(false);
+            onAction();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const PERIODS = [
+  { days: 7, label: "Неделя" },
+  { days: 30, label: "Месяц" },
+  { days: 90, label: "3 месяца" },
+  { days: 0, label: "Вся история" },
+];
+
+function GitImportModal({
+  projectId,
+  onClose,
+  onStarted,
+}: {
+  projectId: string;
+  onClose: () => void;
+  onStarted: () => void;
+}) {
+  const [days, setDays] = useState(30);
+  const [limit, setLimit] = useState(150);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function start() {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/projects/${projectId}/git/import`, {
+        method: "POST",
+        body: JSON.stringify({
+          since_days: days || null,
+          per_repo_limit: limit,
+        }),
+      });
+      onStarted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="card w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="font-medium">Импорт истории git</div>
+        <div className="text-xs text-[var(--muted)] leading-relaxed">
+          ИИ сгруппирует коммиты (включая вложенные репозитории монорепо) в выполненные
+          работы: совпадающие открытые задачи закроются с отчётом, остальные лягут
+          в «Готово» с пометкой «из git». Уже импортированные коммиты пропускаются.
+        </div>
+        <div className="space-y-1.5">
+          <div className="text-sm">Период</div>
+          <div className="flex gap-2 flex-wrap">
+            {PERIODS.map((p) => (
+              <button
+                key={p.days}
+                type="button"
+                onClick={() => setDays(p.days)}
+                className={`chip cursor-pointer ${days === p.days ? "!text-[var(--accent)] !border-[var(--accent)]" : "hover:border-[var(--accent)]"}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <div className="text-sm">Максимум коммитов на репозиторий</div>
+          <input
+            type="number"
+            className="input !w-32"
+            min={10}
+            max={1000}
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value) || 150)}
+          />
+        </div>
+        {error && <div className="text-sm text-red-400">{error}</div>}
+        <div className="flex justify-end gap-2">
+          <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn" onClick={start} disabled={busy}>
+            {busy ? "…" : "Импортировать"}
+          </button>
         </div>
       </div>
     </div>

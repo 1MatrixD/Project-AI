@@ -69,6 +69,31 @@ async def test_material_creates_decisions(user_client: httpx.AsyncClient, projec
     assert any(d["topic"] == "Роли в тесте" and d["source"] == "doc" for d in ds)
 
 
+async def test_tool_access_config(user_client: httpx.AsyncClient, project: dict) -> None:
+    pid = project["id"]
+    r = await user_client.get(f"/api/projects/{pid}/tool-access")
+    data = r.json()
+    # дефолты: чату можно всё, плагину — всё кроме технических
+    assert data["access"]["chat"]["admin"] is True
+    assert data["access"]["plugin"]["admin"] is False
+    assert data["access"]["plugin"]["tasks"] is True
+
+    r = await user_client.get(f"/api/projects/{pid}/tool-access", params={"surface": "plugin"})
+    allowed = r.json()["allowed_tools"]
+    assert "task_list" in allowed and "git_import" not in allowed
+
+    # выключаем плагину задачи, включаем технические
+    access = data["access"]
+    access["plugin"]["tasks"] = False
+    access["plugin"]["admin"] = True
+    r = await user_client.put(f"/api/projects/{pid}/tool-access", json=access)
+    assert r.status_code == 200
+
+    r = await user_client.get(f"/api/projects/{pid}/tool-access", params={"surface": "plugin"})
+    allowed = r.json()["allowed_tools"]
+    assert "task_list" not in allowed and "git_import" in allowed
+
+
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-c", "user.email=t@example.com", "-c", "user.name=Test", *args],
@@ -100,7 +125,10 @@ async def test_git_import(user_client: httpx.AsyncClient, sample_project_dir: Pa
     # существующая открытая задача, которую коммиты должны закрыть
     await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Сделать фичу А"})
 
-    r = await user_client.post(f"/api/projects/{pid}/git/import")
+    r = await user_client.post(
+        f"/api/projects/{pid}/git/import",
+        json={"since_days": 3650, "per_repo_limit": 100},
+    )
     assert r.status_code == 200
     job = await wait_job(user_client, pid, r.json()["job_id"])
     assert job["status"] == "done", job

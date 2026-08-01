@@ -93,15 +93,18 @@ def find_git_repos(root: str, max_depth: int = 3) -> list[str]:
     return repos
 
 
-def read_git_log(repo: str, limit: int = 150) -> list[Commit]:
-    """Читает историю коммитов с файлами (без merge-коммитов)."""
+def read_git_log(repo: str, limit: int = 150, since_days: int | None = None) -> list[Commit]:
+    """Читает историю коммитов с файлами (без merge-коммитов), опционально за период."""
     fmt = "%x1e%h%x1f%an%x1f%ad%x1f%s%x1f%b%x1f"
+    args = [
+        "git", "log", f"-n{limit}", "--no-merges", "--date=short",
+        f"--pretty=format:{fmt}", "--name-only",
+    ]
+    if since_days:
+        args.insert(2, f"--since={since_days} days ago")
     try:
         proc = subprocess.run(
-            [
-                "git", "log", f"-n{limit}", "--no-merges", "--date=short",
-                f"--pretty=format:{fmt}", "--name-only",
-            ],
+            args,
             cwd=repo,
             capture_output=True,
             timeout=120,
@@ -150,7 +153,9 @@ def _fmt_commits(commits: list[Commit]) -> str:
 
 async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
     s = get_settings()
-    per_repo = int(params.get("per_repo_limit", 150))
+    per_repo = max(1, min(1000, int(params.get("per_repo_limit", 150))))
+    since_days = params.get("since_days")
+    since_days = int(since_days) if since_days else None
     maker = get_sessionmaker()
     async with maker() as session:
         project = await session.get(Project, project_id)
@@ -177,7 +182,7 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
         await runner.report(
             job_id, 0.1 + 0.8 * idx / len(repos), f"Импорт git: {rel_repo or 'корень'}"
         )
-        commits = await asyncio.to_thread(read_git_log, repo, per_repo)
+        commits = await asyncio.to_thread(read_git_log, repo, per_repo, since_days)
         fresh = [c for c in commits if c.hash not in imported]
         if not fresh:
             continue

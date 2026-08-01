@@ -202,12 +202,66 @@ async def ask(data: AskIn, project: Project = Depends(get_project)) -> AskOut:
     return AskOut(**result)
 
 
+@router.get("/{project_id}/tool-access")
+async def get_tool_access(
+    project: Project = Depends(get_project), surface: str | None = None
+) -> dict:
+    """Разграничение MCP-инструментов: chat (чат приложения) / plugin (внешний Claude Code)."""
+    from ..services.tool_access import (
+        GROUP_LABELS,
+        TOOL_GROUPS,
+        allowed_tools_for_surface,
+        effective_access,
+    )
+
+    result: dict = {
+        "access": effective_access(project.meta),
+        "groups": TOOL_GROUPS,
+        "labels": GROUP_LABELS,
+    }
+    if surface:
+        result["allowed_tools"] = sorted(allowed_tools_for_surface(project.meta, surface))
+    return result
+
+
+@router.put("/{project_id}/tool-access")
+async def put_tool_access(
+    body: dict,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from ..services.tool_access import SURFACES, TOOL_GROUPS, effective_access
+
+    db_project = await session.get(Project, project.id)
+    clean: dict = {}
+    for surface in SURFACES:
+        incoming = (body.get(surface) or {}) if isinstance(body, dict) else {}
+        clean[surface] = {g: bool(incoming.get(g, True)) for g in TOOL_GROUPS if g in incoming}
+    meta = dict(db_project.meta)
+    meta["tool_access"] = clean
+    db_project.meta = meta
+    await session.commit()
+    return {"access": effective_access(meta)}
+
+
 @router.post("/{project_id}/git/import")
-async def git_import_endpoint(project: Project = Depends(get_project)) -> dict:
-    """Импорт истории git (включая вложенные репо) в канбан."""
+async def git_import_endpoint(
+    body: dict | None = None, project: Project = Depends(get_project)
+) -> dict:
+    """Импорт истории git (включая вложенные репо) в канбан.
+
+    body: {since_days: 30|null (null = вся история), per_repo_limit: 150}.
+    Уже импортированные коммиты пропускаются автоматически.
+    """
     if await runner.has_active(project.id, ["git_import"]):
         raise HTTPException(status_code=409, detail="Импорт git уже идёт")
-    job = await runner.submit(project.id, "git_import", {})
+    body = body or {}
+    params: dict = {}
+    if body.get("since_days"):
+        params["since_days"] = max(1, min(3650, int(body["since_days"])))
+    if body.get("per_repo_limit"):
+        params["per_repo_limit"] = max(1, min(1000, int(body["per_repo_limit"])))
+    job = await runner.submit(project.id, "git_import", params)
     return {"job_id": str(job.id)}
 
 
