@@ -248,28 +248,34 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
         imported: set[str] = set(project.meta.get("git_imported", []))
 
     await runner.report(job_id, 0.05, "Поиск git-репозиториев")
-    repos = await asyncio.to_thread(find_git_repos, project.root_path)
+    from .roots import get_roots
+
+    # все корни мультирепо-проекта; ключ репо: "." | "sub" | "alias" | "alias/sub"
+    repo_list: list[tuple[str, str]] = []
+    for alias, root in get_roots(project):
+        for r in await asyncio.to_thread(find_git_repos, root):
+            rel = os.path.relpath(r, os.path.abspath(root)).replace("\\", "/")
+            if rel == ".":
+                key = alias or "."
+            elif alias:
+                key = f"{alias}/{rel}"
+            else:
+                key = rel
+            repo_list.append((r, key))
     if repo_configs:
-        root_abs0 = os.path.abspath(project.root_path)
-        repos = [
-            r
-            for r in repos
-            if os.path.relpath(r, root_abs0).replace("\\", "/") in repo_configs
-            or (os.path.relpath(r, root_abs0) == "." and "." in repo_configs)
-        ]
-    if not repos:
+        repo_list = [(r, k) for r, k in repo_list if k in repo_configs]
+    if not repo_list:
         return {"repos": 0, "commits_new": 0, "tasks_created": 0, "tasks_closed": 0}
 
     context = await graphdb.get_project_summary_context(str(project_id), 3000)
     decisions = await get_decisions_text(project_id)
 
-    stats = {"repos": len(repos), "commits_new": 0, "tasks_created": 0, "tasks_closed": 0, "groups": 0}
-    root_abs = os.path.abspath(project.root_path)
+    stats = {"repos": len(repo_list), "commits_new": 0, "tasks_created": 0, "tasks_closed": 0, "groups": 0}
 
     try:
         await _import_repos(
-            job_id, project, repos, repo_configs, imported, stats,
-            context, decisions, root_abs, default_limit, default_since,
+            job_id, project, repo_list, repo_configs, imported, stats,
+            context, decisions, default_limit, default_since,
         )
     finally:
         # хэши обработанных порций сохраняем даже при отмене — иначе
@@ -286,25 +292,25 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
 async def _import_repos(
     job_id: uuid.UUID,
     project: Project,
-    repos: list[str],
+    repos: list[tuple[str, str]],
     repo_configs: dict,
     imported: set[str],
     stats: dict,
     context: str,
     decisions: str,
-    root_abs: str,
     default_limit: int,
     default_since: int | None,
 ) -> None:
     s = get_settings()
-    for idx, repo in enumerate(repos):
+    for idx, (repo, rel_repo) in enumerate(repos):
         runner.check_cancelled(job_id)
-        rel_repo = os.path.relpath(repo, root_abs).replace("\\", "/")
         repo_prefix = "" if rel_repo == "." else rel_repo + "/"
         await runner.report(
-            job_id, 0.1 + 0.8 * idx / len(repos), f"Импорт git: {rel_repo or 'корень'}"
+            job_id,
+            0.1 + 0.8 * idx / len(repos),
+            f"Импорт git: {'корень' if rel_repo == '.' else rel_repo}",
         )
-        rc = repo_configs.get(rel_repo if rel_repo != "." else ".", {})
+        rc = repo_configs.get(rel_repo, {})
         limit = max(1, min(1000, int(rc.get("limit", default_limit))))
         since = int(rc["since_days"]) if rc.get("since_days") else default_since
         branch = str(rc["branch"])[:100] if rc.get("branch") else None

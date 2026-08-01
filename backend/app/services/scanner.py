@@ -134,12 +134,15 @@ def scan_directory(
     root: str,
     known: dict[str, tuple[float, int, str]] | None = None,
     force: bool = False,
+    prefix: str = "",
 ) -> list[ScannedFile]:
     """Инвентаризация каталога.
 
     known: rel_path -> (mtime, size, sha256) из БД. Если mtime и size не изменились
     и не force — переиспользуем известный хэш (быстрые инкрементальные сканы).
     Файлы и каталоги из .gitignore (включая вложенные) не попадают в индекс.
+    prefix — алиас дополнительного корня мультирепо-проекта: пути в результате
+    получают вид "prefix/rel" и так же ищутся в known.
     """
     known = known or {}
     root_path = Path(root)
@@ -174,6 +177,8 @@ def scan_directory(
             if st.st_size > 100 * 1024 * 1024:  # >100МБ — пропускаем
                 continue
             rel = str(full.relative_to(root_path)).replace("\\", "/")
+            if prefix:
+                rel = f"{prefix}/{rel}"
             prev = known.get(rel)
             if prev and not force and abs(prev[0] - st.st_mtime) < 1e-6 and prev[1] == st.st_size:
                 sha = prev[2]

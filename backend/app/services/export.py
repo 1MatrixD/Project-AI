@@ -73,6 +73,10 @@ async def export_markdown(project: Project) -> str:
     out.append("")
     out.append(f"> Экспортировано {now} · файлов: {len(files)}, проанализировано ИИ: {analyzed}")
     out.append(f"> Каталог: `{project.root_path}`")
+    from .roots import extra_roots
+
+    for r in extra_roots(project):
+        out.append(f"> Каталог «{r['alias']}/»: `{r['path']}`")
     out.append("")
 
     # --- обзор ---

@@ -12,7 +12,7 @@ from ..config import get_settings
 from ..db import get_sessionmaker
 from ..jobs_runner import JobCancelled, runner
 from ..models import ChangeReport, Project, ProjectFile, TaskItem, WorkLogEntry, utcnow
-from . import claude_cli, graphdb, vectors
+from . import claude_cli, graphdb, roots, vectors
 from .prompts import (
     FILE_ANALYSIS_PROMPT,
     FILE_ANALYSIS_SYSTEM,
@@ -101,6 +101,29 @@ def _graph_files(scanned) -> list[dict]:
     ]
 
 
+def _detect_all(scanned_by_root: list[tuple[str, str, list]]) -> dict:
+    """Определение стека по каждому корню мультирепо (пути без префикса алиаса),
+    результаты сливаются в один detect."""
+    kinds: list[str] = []
+    stack: list[str] = []
+    markers: list[str] = []
+    for alias, root, part in scanned_by_root:
+        cut = len(alias) + 1 if alias else 0
+        d = detect_project(root, [f.rel_path[cut:] for f in part])
+        for k in d.get("project_kinds", []):
+            if k != "unknown" and k not in kinds:
+                kinds.append(k)
+        for t in d.get("stack", []):
+            if t not in stack:
+                stack.append(t)
+        markers.extend((f"{alias}/{m}" if alias else m) for m in d.get("markers", []))
+    return {
+        "project_kinds": sorted(kinds) or ["unknown"],
+        "stack": stack,
+        "markers": markers[:20],
+    }
+
+
 def _is_ai_analyzable(rel_path: str, kind: str, size: int) -> bool:
     if kind not in ANALYZABLE_KINDS:
         return False
@@ -143,14 +166,19 @@ async def _select_files_for_analysis(
 
 async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     s = get_settings()
-    file_list = "\n".join(f"- {f.rel_path} ({f.kind}, {f.size} байт)" for f in batch)
+    # все файлы батча из одного корня (батчи собираются per-root в _run_ai_analysis):
+    # claude работает с cwd этого корня и путями без префикса алиаса
+    alias, _, root_abs = roots.split_rel(project, batch[0].rel_path)
+    cut = len(alias) + 1 if alias else 0
+    local = {f.id: f.rel_path[cut:] for f in batch}
+    file_list = "\n".join(f"- {local[f.id]} ({f.kind}, {f.size} байт)" for f in batch)
     prompt = FILE_ANALYSIS_PROMPT.format(file_list=file_list)
     obj = meta = None
     for attempt in (1, 2):  # транзиентные сбои claude ретраим один раз
         try:
             obj, meta = await claude_cli.run_json_prompt(
                 prompt,
-                cwd=project.root_path,
+                cwd=root_abs,
                 system=FILE_ANALYSIS_SYSTEM,
                 tools=["Read"],
                 model=s.ai_model,
@@ -179,7 +207,7 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     vector_docs: list[dict] = []
     async with get_sessionmaker()() as session:
         for f in batch:
-            item = by_path.get(f.rel_path)
+            item = by_path.get(local[f.id])
             if item is None:
                 await session.execute(
                     update(ProjectFile).where(ProjectFile.id == f.id).values(analysis_status="error")
@@ -206,6 +234,7 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
                     "key": f.rel_path,
                     "title": f.rel_path,
                     "text": f"{role}. {summary}" + (f"\nСущности: {entity_names}" if entity_names else ""),
+                    "root": alias,
                 }
             )
             analyzed += 1
@@ -230,7 +259,16 @@ async def _run_ai_analysis(
     files = await _select_files_for_analysis(project.id, limit, retry_errors)
     if not files:
         return {"analyzed": 0, "errors": 0, "cost_usd": 0.0, "pending_left": 0}
-    batches = [files[i : i + s.ai_batch_size] for i in range(0, len(files), s.ai_batch_size)]
+    # батчи не смешивают корни мультирепо: у каждого корня свой cwd для claude
+    by_alias: dict[str, list[ProjectFile]] = {}
+    for f in files:
+        alias, _, _root = roots.split_rel(project, f.rel_path)
+        by_alias.setdefault(alias, []).append(f)
+    batches = [
+        group[i : i + s.ai_batch_size]
+        for group in by_alias.values()
+        for i in range(0, len(group), s.ai_batch_size)
+    ]
     sem = asyncio.Semaphore(s.ai_concurrency)
     done_count = 0
     totals = {"analyzed": 0, "errors": 0, "cost_usd": 0.0}
@@ -326,10 +364,15 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
     await _set_project(project_id, status="indexing")
 
     try:
-        await runner.report(job_id, 0.02, "Сканирование каталога")
+        await runner.report(job_id, 0.02, "Сканирование каталогов")
         known = await _load_known(project_id)
         force = mode == "reverify"
-        scanned = await asyncio.to_thread(scan_directory, project.root_path, known, force)
+        scanned_by_root: list[tuple[str, str, list]] = []
+        scanned = []
+        for alias, root in roots.get_roots(project):
+            part = await asyncio.to_thread(scan_directory, root, known, force, alias)
+            scanned_by_root.append((alias, root, part))
+            scanned.extend(part)
         diff = diff_scan(scanned, known)
         runner.check_cancelled(job_id)
 
@@ -348,9 +391,7 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
 
         await runner.report(job_id, 0.2, "Синхронизация структуры в граф")
         pid = str(project_id)
-        detect = await asyncio.to_thread(
-            detect_project, project.root_path, [f.rel_path for f in scanned]
-        )
+        detect = await asyncio.to_thread(_detect_all, scanned_by_root)
         meta = dict(project.meta)
         meta["detect"] = detect
         await graphdb.sync_project_node(pid, project.name, detect)
@@ -484,6 +525,9 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
     from .rlm import GIT_TOOLS
 
     context = await graphdb.get_project_summary_context(str(project_id), 3000)
+    note = roots.roots_note(project)
+    if note:
+        context = f"{note}\n\n{context}"
     decisions = await get_decisions_text(project_id)
     sem = asyncio.Semaphore(s.ai_concurrency)
     done_cnt = 0

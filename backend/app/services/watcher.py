@@ -53,39 +53,51 @@ class _Handler(FileSystemEventHandler):
 
 
 class WatcherManager:
-    """Один Observer-поток на процесс, watch на каждый включённый проект."""
+    """Один Observer-поток на процесс, watch на каждый корень включённого
+    проекта (мультирепо — несколько каталогов)."""
 
     def __init__(self) -> None:
         self._observer: Observer | None = None
-        self._watches: dict[uuid.UUID, object] = {}
+        self._watches: dict[uuid.UUID, list[object]] = {}
         self._pending: dict[uuid.UUID, asyncio.Task] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def is_watching(self, project_id: uuid.UUID) -> bool:
         return project_id in self._watches
 
-    def start_watch(self, project_id: uuid.UUID, root_path: str) -> None:
+    def start_watch(self, project_id: uuid.UUID, root_paths: str | list[str]) -> None:
         if project_id in self._watches:
             return
-        if not os.path.isdir(root_path):
-            raise FileNotFoundError(f"Каталог не найден: {root_path}")
+        paths = [root_paths] if isinstance(root_paths, str) else list(root_paths)
+        for p in paths:
+            if not os.path.isdir(p):
+                raise FileNotFoundError(f"Каталог не найден: {p}")
         self._loop = asyncio.get_running_loop()
         if self._observer is None:
             self._observer = Observer()
             self._observer.daemon = True
             self._observer.start()
-        self._watches[project_id] = self._observer.schedule(
-            _Handler(self, project_id), root_path, recursive=True
-        )
-        log.info("Наблюдение включено: %s (%s)", project_id, root_path)
+        handler = _Handler(self, project_id)
+        self._watches[project_id] = [
+            self._observer.schedule(handler, p, recursive=True) for p in paths
+        ]
+        log.info("Наблюдение включено: %s (%s)", project_id, ", ".join(paths))
+
+    def restart_watch(self, project_id: uuid.UUID, root_paths: list[str]) -> None:
+        """Перечитать набор корней (добавили/убрали каталог при включённом watch)."""
+        if project_id not in self._watches:
+            return
+        self.stop_watch(project_id)
+        self.start_watch(project_id, root_paths)
 
     def stop_watch(self, project_id: uuid.UUID) -> None:
-        watch = self._watches.pop(project_id, None)
-        if watch is not None and self._observer is not None:
-            try:
-                self._observer.unschedule(watch)
-            except Exception:
-                pass
+        watches = self._watches.pop(project_id, None)
+        if watches and self._observer is not None:
+            for watch in watches:
+                try:
+                    self._observer.unschedule(watch)
+                except Exception:
+                    pass
             log.info("Наблюдение выключено: %s", project_id)
         pending = self._pending.pop(project_id, None)
         if pending is not None:
@@ -128,10 +140,12 @@ class WatcherManager:
         async with get_sessionmaker()() as session:
             res = await session.execute(select(Project))
             projects = list(res.scalars())
+        from .roots import get_roots
+
         for p in projects:
             if (p.meta or {}).get("watch"):
                 try:
-                    self.start_watch(p.id, p.root_path)
+                    self.start_watch(p.id, [r for _a, r in get_roots(p)])
                 except Exception as e:
                     log.warning("Не удалось возобновить наблюдение «%s»: %s", p.name, e)
 

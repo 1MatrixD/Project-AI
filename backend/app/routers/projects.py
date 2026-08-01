@@ -144,15 +144,16 @@ async def set_watch(
     project: Project = Depends(get_project),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Наблюдение за каталогом: изменения в коде автоматически запускают
+    """Наблюдение за каталогами проекта: изменения в коде автоматически запускают
     инкрементальное обновление индекса (с дебаунсом). Состояние переживает
     рестарт сервера (meta.watch)."""
+    from ..services.roots import get_roots
     from ..services.watcher import watcher
 
     enabled = bool(body.get("enabled"))
     if enabled:
         try:
-            watcher.start_watch(project.id, project.root_path)
+            watcher.start_watch(project.id, [r for _a, r in get_roots(project)])
         except FileNotFoundError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -165,6 +166,92 @@ async def set_watch(
     db_project.meta = meta
     await session.commit()
     return {"watch": enabled}
+
+
+@router.post("/{project_id}/roots")
+async def add_root(
+    body: dict,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Мультирепо: добавить каталог к проекту. Его файлы получают префикс
+    «алиас/» и попадают в общий индекс/граф/поиск. Сразу запускается
+    инкрементальная индексация."""
+    from ..services.roots import extra_roots, get_roots, make_alias
+    from ..services.watcher import watcher
+
+    raw = str(body.get("path", "")).strip()
+    root = Path(raw)
+    if not raw or not root.is_dir():
+        raise HTTPException(status_code=400, detail=f"Каталог не найден: {raw}")
+    path = str(root.resolve())
+    db_project = await session.get(Project, project.id)
+    existing = {str(Path(p).resolve()) for _a, p in get_roots(db_project)}
+    if path in existing:
+        raise HTTPException(status_code=409, detail="Этот каталог уже в проекте")
+    alias = make_alias(path, db_project)
+    meta = dict(db_project.meta)
+    meta["extra_roots"] = [*extra_roots(meta), {"alias": alias, "path": path}]
+    db_project.meta = meta
+    await session.commit()
+    await session.refresh(db_project)
+
+    if watcher.is_watching(project.id):
+        try:
+            watcher.restart_watch(project.id, [r for _a, r in get_roots(db_project)])
+        except Exception as e:
+            log.warning("Watch не перезапустился после добавления корня: %s", e)
+
+    job_id = None
+    if not await runner.has_active(project.id, ["index"]):
+        job = await runner.submit(project.id, "index", {"mode": "update"})
+        job_id = str(job.id)
+    return {"alias": alias, "path": path, "extra_roots": meta["extra_roots"], "job_id": job_id}
+
+
+@router.delete("/{project_id}/roots/{alias}")
+async def remove_root(
+    alias: str,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Убрать дополнительный каталог: его файлы удаляются из реестра,
+    графа и векторного индекса."""
+    from sqlalchemy import delete as sa_delete
+
+    from ..models import ProjectFile
+    from ..services.roots import extra_roots, get_roots
+    from ..services.watcher import watcher
+
+    roots_list = extra_roots(project.meta)
+    if alias not in {r["alias"] for r in roots_list}:
+        raise HTTPException(status_code=404, detail=f"Каталог «{alias}» не найден в проекте")
+
+    db_project = await session.get(Project, project.id)
+    meta = dict(db_project.meta)
+    meta["extra_roots"] = [r for r in roots_list if r["alias"] != alias]
+    db_project.meta = meta
+    await session.execute(
+        sa_delete(ProjectFile).where(
+            ProjectFile.project_id == project.id,
+            ProjectFile.rel_path.like(alias + "/%"),
+        )
+    )
+    await session.commit()
+    await session.refresh(db_project)
+
+    try:
+        await graphdb.delete_path_prefix(str(project.id), alias)
+    except Exception as e:
+        log.warning("Очистка графа по «%s/» не удалась: %s", alias, e)
+    await vectors.delete(str(project.id), root=alias)
+
+    if watcher.is_watching(project.id):
+        try:
+            watcher.restart_watch(project.id, [r for _a, r in get_roots(db_project)])
+        except Exception as e:
+            log.warning("Watch не перезапустился после удаления корня: %s", e)
+    return {"extra_roots": meta["extra_roots"]}
 
 
 @router.get("/{project_id}/changes", response_model=list[ChangeReportOut])
@@ -338,11 +425,19 @@ async def git_repos(project: Project = Depends(get_project)) -> list[dict]:
     import asyncio
 
     from ..services.git_import import find_git_repos, repo_info
+    from ..services.roots import get_roots
 
-    repos = await asyncio.to_thread(find_git_repos, project.root_path)
-    return await asyncio.gather(
-        *[asyncio.to_thread(repo_info, r, project.root_path) for r in repos]
-    )
+    out: list[dict] = []
+    for alias, root in get_roots(project):
+        repos = await asyncio.to_thread(find_git_repos, root)
+        infos = await asyncio.gather(
+            *[asyncio.to_thread(repo_info, r, root) for r in repos]
+        )
+        for info in infos:
+            if alias:
+                info["path"] = alias if info["path"] == "." else f"{alias}/{info['path']}"
+            out.append(info)
+    return out
 
 
 @router.post("/{project_id}/git/import")

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from ..config import get_settings
 from ..db import get_sessionmaker
 from ..models import Project, ProjectFile
-from . import claude_cli, graphdb
+from . import claude_cli, graphdb, roots
 
 log = logging.getLogger("projectai.rlm")
 
@@ -81,14 +81,17 @@ ROOT_SYNTH_PROMPT = """Вопрос пользователя по проекту
 Если данных не хватает — скажи, чего именно."""
 
 
-async def sub_query(project_root: str, question: str, paths: list[str], model: str | None = None) -> str:
-    """Под-вызов RLM: изолированный агент читает только назначенные файлы."""
+async def sub_query(project: Project, question: str, paths: list[str], model: str | None = None) -> str:
+    """Под-вызов RLM: изолированный агент читает только назначенные файлы.
+
+    cwd — основной каталог; файлы дополнительных корней мультирепо
+    подставляются абсолютными путями, иначе Read их не найдёт."""
     s = get_settings()
-    files = "\n".join(f"- {p}" for p in paths[:30])
+    files = "\n".join(f"- {roots.fs_path_for_prompt(project, p)}" for p in paths[:30])
     prompt = SUB_PROMPT.format(question=question, files=files)
     data = await claude_cli.run_prompt(
         prompt,
-        cwd=project_root,
+        cwd=project.root_path,
         system=SUB_SYSTEM,
         tools=["Read", "Grep", *GIT_TOOLS],
         model=model or s.ai_model,
@@ -116,7 +119,7 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
 
     if paths:
         # пользователь сам ограничил область — один под-вызов
-        result = await sub_query(project.root_path, question, paths)
+        result = await sub_query(project, question, paths)
         return {"answer": result, "sub_queries": [{"focus": question, "paths": paths}]}
 
     graph_context = await graphdb.get_project_summary_context(pid, 4000)
@@ -177,7 +180,7 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
         paths_g = [str(p) for p in g["paths"][:12]]
         async with sem:
             try:
-                ans = await sub_query(project.root_path, f"{question}\nФокус: {focus}", paths_g)
+                ans = await sub_query(project, f"{question}\nФокус: {focus}", paths_g)
             except claude_cli.ClaudeError as e:
                 ans = f"(под-агент упал: {e})"
         return {"focus": focus, "paths": paths_g, "answer": ans}

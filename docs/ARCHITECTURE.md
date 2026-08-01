@@ -16,7 +16,9 @@ FastAPI (:8010) ──── JobRunner (встроенные фоновые во
    │        │
    │        ├─ Postgres (docker): users, projects, files, chats, jobs,
    │        │                     tasks (канбан), worklog, materials, change_reports
-   │        └─ Neo4j (docker):    карта знаний (граф)
+   │        ├─ Neo4j (docker):    карта знаний (граф) + fulltext-поиск
+   │        └─ Qdrant (docker):   векторный (семантический) поиск — эмбеддинги
+   │                              файлов, материалов, соглашений (fastembed, локально)
    │
    └─ claude -p (Claude Code CLI, headless)
         │  --mcp-config → MCP-сервер projectai (stdio, backend/mcp_main.py)
@@ -41,8 +43,24 @@ FastAPI (:8010) ──── JobRunner (встроенные фоновые во
 | `Task` | задача канбана | `AFFECTS → File` |
 | `WorkLog` | запись «что сделано» | `UPDATED → File` |
 
-Полнотекстовый индекс `knowledge_fulltext` по name/path/summary/title — основа
-`graph_search`. `graph_cypher` — read-only (записи отклоняются).
+Полнотекстовый индекс `knowledge_fulltext` по name/path/summary/title плюс
+семантический поиск по эмбеддингам (Qdrant, `services/vectors.py`) — вместе дают
+гибридный `graph_search`: у каждого хита `match: fulltext | semantic | both`.
+Эмбеддинги считаются локально (fastembed/ONNX, модель multilingual-MiniLM) при
+ИИ-анализе файлов, обработке материалов и записи соглашений; недоступный Qdrant
+не валит пайплайны (поиск деградирует до fulltext). `graph_cypher` — read-only
+(записи отклоняются).
+
+## Мультирепо (`services/roots.py`)
+
+Проект может состоять из нескольких каталогов: основной (`root_path`, файлы без
+префикса) и дополнительные (`meta.extra_roots: [{alias, path}]`, файлы с префиксом
+`alias/` в реестре, графе, векторах и задачах). Алиас выбирается без конфликтов
+с верхним уровнем основного каталога, поэтому любой путь разрешается однозначно.
+ИИ-анализ идёт батчами per-root (cwd своего корня, пути в промпте локальные),
+RLM подставляет для чужих корней абсолютные пути, watchdog наблюдает за всеми
+корнями, git-импорт находит репозитории во всех каталогах. Удаление каталога
+чистит его файлы из реестра, графа и векторного индекса.
 
 ## Пайплайн индексации (`services/indexer.py`)
 

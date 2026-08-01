@@ -17,6 +17,7 @@ export type Project = {
     };
     stats?: { files_total: number; by_kind: Record<string, number>; analyzed: number };
     watch?: boolean;
+    extra_roots?: { alias: string; path: string }[];
   };
   created_at: string;
   updated_at: string;

@@ -142,6 +142,9 @@ async def send_message(
     session_id = chat.claude_session_id
     model, reasoning = chat.model, chat.reasoning
     project_name, root_path = project.name, project.root_path
+    from ..services.roots import roots_note
+
+    roots_text = roots_note(project)
     pid = project.id
 
     async def event_stream():
@@ -168,7 +171,9 @@ async def send_message(
                 log.warning("MCP-конфиг не собрался: %s", e)
                 mcp_config = None
 
-            system = build_chat_system_prompt(project_name, root_path, graph_context, decisions)
+            system = build_chat_system_prompt(
+                project_name, root_path, graph_context, decisions, roots_note=roots_text
+            )
             yield _sse({"type": "start"})
 
             async for event in claude_cli.stream_prompt(

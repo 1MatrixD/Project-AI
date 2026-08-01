@@ -267,15 +267,17 @@ TASK_VERIFY_PROMPT = """Проект: «{project_name}». Корень кода 
 
 
 def build_chat_system_prompt(
-    project_name: str, root_path: str, graph_context: str, decisions: str = ""
+    project_name: str, root_path: str, graph_context: str, decisions: str = "",
+    roots_note: str = "",
 ) -> str:
     decisions_block = (
         f"\n\nСоглашения проекта (актуальные решения; код, противоречащий им, — легаси):\n{decisions}"
         if decisions
         else ""
     )
+    roots_block = f"\n{roots_note}" if roots_note else ""
     return f"""Ты — ИИ-ассистент проекта «{project_name}» в системе «Проекты ИИ».
-Корневой каталог кода проекта: {root_path} (это твой текущий рабочий каталог).{decisions_block}
+Корневой каталог кода проекта: {root_path} (это твой текущий рабочий каталог).{roots_block}{decisions_block}
 
 У тебя есть карта знаний проекта (граф Neo4j) и инструменты MCP-сервера projectai:
 - graph_search / graph_cypher — поиск по карте знаний (файлы, сущности, компоненты, документы, задачи, соглашения);

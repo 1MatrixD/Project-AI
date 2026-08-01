@@ -660,3 +660,29 @@ async def get_stats(project_id: str) -> dict:
 async def delete_project_graph(project_id: str) -> None:
     async with get_driver().session() as s:
         await s.run("MATCH (n) WHERE n.project_id = $pid DETACH DELETE n", pid=project_id)
+
+
+async def delete_path_prefix(project_id: str, alias: str) -> None:
+    """Удаление каталога мультирепо-проекта: файлы с путями «alias/…»,
+    их сущности и каталоги (включая узел самого алиаса)."""
+    prefix = alias.rstrip("/") + "/"
+    async with get_driver().session() as s:
+        await s.run(
+            """
+            MATCH (f:File) WHERE f.project_id = $pid AND f.path STARTS WITH $prefix
+            OPTIONAL MATCH (f)-[:DEFINES]->(e:Entity)
+            DETACH DELETE f, e
+            """,
+            pid=project_id,
+            prefix=prefix,
+        )
+        await s.run(
+            """
+            MATCH (d:Directory)
+            WHERE d.project_id = $pid AND (d.path = $alias OR d.path STARTS WITH $prefix)
+            DETACH DELETE d
+            """,
+            pid=project_id,
+            alias=alias.rstrip("/"),
+            prefix=prefix,
+        )

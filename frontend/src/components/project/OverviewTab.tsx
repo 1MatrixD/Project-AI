@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { API_URL, api, fmtDate, getToken } from "@/lib/api";
 import type { ChangeReport, Decision, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
+import DirPicker from "@/components/DirPicker";
 
 const KIND_LABELS: Record<string, string> = {
   code: "код",
@@ -27,6 +28,7 @@ export default function OverviewTab({
   const [changes, setChanges] = useState<ChangeReport[]>([]);
   const [error, setError] = useState("");
   const [showGitImport, setShowGitImport] = useState(false);
+  const [showRootPicker, setShowRootPicker] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true);
   const [watch, setWatch] = useState(false);
@@ -67,6 +69,32 @@ export default function OverviewTab({
       setError(e instanceof Error ? e.message : "Ошибка");
     }
   }
+  async function addRoot(path: string) {
+    setShowRootPicker(false);
+    setError("");
+    try {
+      await api(`/projects/${project.id}/roots`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+      onAction();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
+  }
+
+  async function removeRoot(alias: string) {
+    if (!confirm(`Убрать каталог «${alias}» из проекта? Его файлы удалятся из карты знаний.`)) return;
+    setError("");
+    try {
+      await api(`/projects/${project.id}/roots/${encodeURIComponent(alias)}`, { method: "DELETE" });
+      onAction();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
+  }
+
+  const extraRoots = project.meta.extra_roots ?? [];
   const overview = project.meta.overview;
   const stats = project.meta.stats;
   const graphStats = project.stats;
@@ -187,6 +215,15 @@ export default function OverviewTab({
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                      onClick={() => { setShowMenu(false); setShowRootPicker(true); }}
+                    >
+                      🗂 Добавить каталог
+                      <span className="block text-[11px] text-[var(--muted)]">
+                        мультирепо: например, отдельный репозиторий бэкенда
+                      </span>
+                    </button>
+                    <button
+                      className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setShowMenu(false); downloadExport(); }}
                     >
                       ⬇ Экспорт карты знаний
@@ -213,6 +250,26 @@ export default function OverviewTab({
               <span key={s} className="chip">{s}</span>
             ))}
           </div>
+          {extraRoots.length > 0 && (
+            <div className="space-y-1.5 pt-1 border-t border-[var(--border)]">
+              <div className="text-xs text-[var(--muted)] pt-2">
+                Дополнительные каталоги (их файлы ходят с префиксом «алиас/»):
+              </div>
+              {extraRoots.map((r) => (
+                <div key={r.alias} className="flex items-center gap-2 text-xs group min-w-0">
+                  <span className="chip shrink-0">{r.alias}/</span>
+                  <span className="font-mono text-[var(--muted)] truncate">{r.path}</span>
+                  <button
+                    className="text-[var(--muted)] hover:text-red-300 opacity-0 group-hover:opacity-100 shrink-0"
+                    title="Убрать каталог из проекта"
+                    onClick={() => removeRoot(r.alias)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {overview?.components?.length ? (
@@ -319,6 +376,9 @@ export default function OverviewTab({
             onAction();
           }}
         />
+      )}
+      {showRootPicker && (
+        <DirPicker onSelect={addRoot} onClose={() => setShowRootPicker(false)} />
       )}
     </div>
   );
