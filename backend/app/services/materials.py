@@ -61,7 +61,7 @@ async def extract_tasks_from_text(
         tools=[],
         model=s.ai_model,
         reasoning="medium",
-        max_turns=1,
+        max_turns=s.claude_max_turns,
         timeout=s.claude_timeout_sec,
     )
     if not isinstance(obj, dict):

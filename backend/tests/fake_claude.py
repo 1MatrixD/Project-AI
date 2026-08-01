@@ -1,6 +1,7 @@
 """Фейковый claude CLI для тестов: имитирует ответы по типу промпта."""
 
 import json
+import os
 import re
 import sys
 
@@ -177,6 +178,27 @@ def answer_for(prompt: str) -> str:
 def main() -> None:
     prompt = get_arg("-p") or ""
     fmt = get_arg("--output-format") or "text"
+
+    # Управляемый сбой RLM-синтеза: так проверяется, что выводы под-агентов
+    # не теряются, когда финальная сводка не удалась.
+    if os.environ.get("FAKE_CLAUDE_FAIL_SYNTH") == "1" and "Синтезируй один цельный" in prompt:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "error_max_turns",
+                    "is_error": True,
+                    "result": "error_max_turns",
+                    "session_id": "fake-session-123",
+                    "total_cost_usd": 0.0,
+                    "duration_ms": 5,
+                    "num_turns": 1,
+                },
+                ensure_ascii=False,
+            )
+        )
+        sys.exit(0)
+
     text = answer_for(prompt)
 
     if fmt == "stream-json":

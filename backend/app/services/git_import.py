@@ -341,7 +341,7 @@ async def _import_repos(
                     tools=[],
                     model=s.ai_model,
                     reasoning="medium",
-                    max_turns=1,
+                    max_turns=s.claude_max_turns,
                     timeout=s.claude_timeout_sec,
                 )
             except claude_cli.ClaudeError as e:

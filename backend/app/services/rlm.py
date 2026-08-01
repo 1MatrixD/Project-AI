@@ -168,7 +168,7 @@ async def answer(
             tools=[],
             model=s.ai_model,
             reasoning="medium",
-            max_turns=1,
+            max_turns=s.claude_max_turns,
             timeout=s.claude_timeout_sec,
         )
     except claude_cli.ClaudeError as e:
@@ -222,21 +222,29 @@ async def answer(
     sub_answers = "\n\n".join(
         f"### Группа: {s_['focus']}\nФайлы: {', '.join(s_['paths'])}\n{s_['answer']}" for s_ in subs
     )
-    synth = await claude_cli.run_prompt(
-        ROOT_SYNTH_PROMPT.format(
-            project_name=project.name,
-            question=question,
-            graph_context=graph_context,
-            sub_answers=sub_answers[:60000],
-        ),
-        system=ROOT_SYNTH_SYSTEM,
-        tools=[],
-        model=s.ai_model,
-        reasoning="medium",
-        max_turns=1,
-        timeout=s.claude_timeout_sec,
-    )
+    try:
+        synth = await claude_cli.run_prompt(
+            ROOT_SYNTH_PROMPT.format(
+                project_name=project.name,
+                question=question,
+                graph_context=graph_context,
+                sub_answers=sub_answers[:60000],
+            ),
+            system=ROOT_SYNTH_SYSTEM,
+            tools=[],
+            model=s.ai_model,
+            reasoning="medium",
+            max_turns=s.claude_max_turns,
+            timeout=s.claude_timeout_sec,
+        )
+        final_answer = str(synth.get("result", ""))
+    except claude_cli.ClaudeError as e:
+        # Под-агенты уже прочитали файлы — это самая дорогая часть работы.
+        # Терять её из-за упавшего синтеза нельзя, отдаём их выводы как есть.
+        log.warning("RLM-синтез упал (%s), отдаём ответы под-агентов", e)
+        final_answer = sub_answers
+
     return {
-        "answer": str(synth.get("result", "")),
+        "answer": final_answer,
         "sub_queries": [{"focus": s_["focus"], "paths": s_["paths"]} for s_ in subs],
     }

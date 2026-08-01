@@ -74,7 +74,7 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
         tools=[],
         model=s.ai_model,
         reasoning="medium",
-        max_turns=1,
+        max_turns=s.claude_max_turns,
         timeout=s.claude_timeout_sec,
     )
     if not isinstance(obj, dict) or not isinstance(obj.get("subtasks"), list):

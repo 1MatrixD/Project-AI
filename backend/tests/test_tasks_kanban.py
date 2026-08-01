@@ -84,6 +84,30 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     assert any(row["title"] == "Первая задача" and row["status"] == "done" for row in rows)
 
 
+async def test_rlm_survives_failed_synthesis(project: dict, monkeypatch) -> None:
+    """Упавшая финальная сводка не должна съедать работу под-агентов.
+
+    Под-агенты уже прочитали файлы — это самая дорогая часть RLM. Раньше любая
+    ошибка синтеза (например, упёршийся в потолок ходов вызов) роняла весь
+    пайплайн и исследование терялось целиком.
+    """
+    import uuid as _uuid
+
+    from app.db import get_sessionmaker
+    from app.models import Project as ProjectModel
+    from app.services import rlm
+
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL_SYNTH", "1")
+    async with get_sessionmaker()() as session:
+        proj = await session.get(ProjectModel, _uuid.UUID(project["id"]))
+
+    res = await rlm.answer(proj, "как устроен main.py?")
+
+    assert res["sub_queries"], res
+    # вместо исключения вернулись выводы под-агентов, а не пустота
+    assert "Группа:" in res["answer"], res["answer"][:300]
+
+
 async def test_enrich_task_rlm(
     user_client: httpx.AsyncClient, project: dict, monkeypatch
 ) -> None:
