@@ -172,11 +172,7 @@ export default function KanbanTab({
                     draggable
                     onDragStart={() => setDragId(t.id)}
                     onClick={() => setSelectedId(t.id)}
-                    className={`border bg-[var(--surface-2)] rounded-lg p-3 space-y-1.5 cursor-pointer ${
-                      busy
-                        ? "border-[var(--accent)]"
-                        : "border-[var(--border)] hover:border-[var(--accent)]"
-                    }`}
+                    className="border border-[var(--border)] bg-[var(--surface-2)] rounded-lg p-3 space-y-1.5 cursor-pointer hover:border-[var(--accent)]"
                   >
                     <div className="text-sm leading-snug">{t.title}</div>
                     <div className="flex gap-1.5 flex-wrap">
@@ -187,7 +183,12 @@ export default function KanbanTab({
                         </span>
                       )}
                       {busy ? (
-                        <span className="chip pulse text-[var(--accent)]">🧠 разбираю…</span>
+                        <span
+                          className="chip pulse text-[var(--accent)]"
+                          title="Идёт RLM-проработка"
+                        >
+                          🧠 RLM
+                        </span>
                       ) : (
                         t.extra?.enriched && (
                           <span className="chip text-[var(--accent-2)]">🧠 RLM</span>
