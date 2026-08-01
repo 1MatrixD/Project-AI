@@ -161,7 +161,27 @@ async def test_git_import(user_client: httpx.AsyncClient, sample_project_dir: Pa
     assert job["stats"]["tasks_partial"] == 1
     assert job["stats"]["plan_steps_marked"] == 1
 
-    # повторный импорт не плодит дубликаты
-    r = await user_client.post(f"/api/projects/{pid}/git/import")
+    # список репозиториев с ветками — для модалки настройки
+    r = await user_client.get(f"/api/projects/{pid}/git/repos")
+    repos = r.json()
+    service = next(x for x in repos if x["path"] == "service")
+    assert service["total_commits"] == 2
+    assert service["current_branch"] in service["branches"] or service["branches"] == []
+
+    # повторный импорт с per-repo конфигом (ветка/период/лимит) не плодит дубликаты
+    r = await user_client.post(
+        f"/api/projects/{pid}/git/import",
+        json={
+            "repos": [
+                {
+                    "path": "service",
+                    "branch": service["current_branch"],
+                    "since_days": 3650,
+                    "limit": 50,
+                }
+            ]
+        },
+    )
     job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["stats"]["repos"] == 1
     assert job["stats"]["commits_new"] == 0

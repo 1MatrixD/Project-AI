@@ -98,13 +98,60 @@ def find_git_repos(root: str, max_depth: int = 3) -> list[str]:
     return repos
 
 
-def read_git_log(repo: str, limit: int = 150, since_days: int | None = None) -> list[Commit]:
-    """Читает историю коммитов с файлами (без merge-коммитов), опционально за период."""
+def _run_git(repo: str, *args: str, timeout: int = 60) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("git %s в %s не удался: %s", args[0] if args else "?", repo, e)
+        return None
+    if proc.returncode != 0:
+        log.warning("git %s в %s: %s", " ".join(args[:2]), repo, proc.stderr.decode(errors="replace")[:200])
+        return None
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
+def repo_info(repo: str, root: str) -> dict:
+    """Сводка по репозиторию: ветки, текущая ветка, последний коммит."""
+    rel = os.path.relpath(repo, os.path.abspath(root)).replace("\\", "/")
+    current = (_run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "").strip() or "HEAD"
+    local = (_run_git(repo, "branch", "--format=%(refname:short)") or "").splitlines()
+    remote = (_run_git(repo, "branch", "-r", "--format=%(refname:short)") or "").splitlines()
+    branches: list[str] = []
+    for b in [*local, *remote]:
+        b = b.strip()
+        if b and "HEAD" not in b and b not in branches:
+            branches.append(b)
+    last = (_run_git(repo, "log", "-1", "--date=short", "--pretty=format:%ad %s") or "").strip()
+    total = (_run_git(repo, "rev-list", "--count", "HEAD") or "0").strip()
+    return {
+        "path": "." if rel == "." else rel,
+        "current_branch": current,
+        "branches": branches[:30],
+        "last_commit": last[:200],
+        "total_commits": int(total) if total.isdigit() else 0,
+    }
+
+
+def read_git_log(
+    repo: str,
+    limit: int = 150,
+    since_days: int | None = None,
+    branch: str | None = None,
+) -> list[Commit]:
+    """Читает историю коммитов с файлами (без merge-коммитов), опционально за период/ветку."""
     fmt = "%x1e%h%x1f%an%x1f%ad%x1f%s%x1f%b%x1f"
     args = [
         "git", "log", f"-n{limit}", "--no-merges", "--date=short",
         f"--pretty=format:{fmt}", "--name-only",
     ]
+    if branch:
+        args.insert(2, branch)
     if since_days:
         args.insert(2, f"--since={since_days} days ago")
     try:
@@ -185,9 +232,15 @@ def _fmt_commits(commits: list[Commit]) -> str:
 
 async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
     s = get_settings()
-    per_repo = max(1, min(1000, int(params.get("per_repo_limit", 150))))
-    since_days = params.get("since_days")
-    since_days = int(since_days) if since_days else None
+    default_limit = max(1, min(1000, int(params.get("per_repo_limit", 150))))
+    default_since = params.get("since_days")
+    default_since = int(default_since) if default_since else None
+    # per-repo конфиги из модалки: [{path, branch, since_days, limit}]
+    repo_configs: dict[str, dict] = {
+        str(rc.get("path", "")).replace("\\", "/"): rc
+        for rc in (params.get("repos") or [])
+        if isinstance(rc, dict) and rc.get("path")
+    }
     maker = get_sessionmaker()
     async with maker() as session:
         project = await session.get(Project, project_id)
@@ -197,6 +250,14 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
 
     await runner.report(job_id, 0.05, "Поиск git-репозиториев")
     repos = await asyncio.to_thread(find_git_repos, project.root_path)
+    if repo_configs:
+        root_abs0 = os.path.abspath(project.root_path)
+        repos = [
+            r
+            for r in repos
+            if os.path.relpath(r, root_abs0).replace("\\", "/") in repo_configs
+            or (os.path.relpath(r, root_abs0) == "." and "." in repo_configs)
+        ]
     if not repos:
         return {"repos": 0, "commits_new": 0, "tasks_created": 0, "tasks_closed": 0}
 
@@ -212,7 +273,11 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
         await runner.report(
             job_id, 0.1 + 0.8 * idx / len(repos), f"Импорт git: {rel_repo or 'корень'}"
         )
-        commits = await asyncio.to_thread(read_git_log, repo, per_repo, since_days)
+        rc = repo_configs.get(rel_repo if rel_repo != "." else ".", {})
+        limit = max(1, min(1000, int(rc.get("limit", default_limit))))
+        since = int(rc["since_days"]) if rc.get("since_days") else default_since
+        branch = str(rc["branch"])[:100] if rc.get("branch") else None
+        commits = await asyncio.to_thread(read_git_log, repo, limit, since, branch)
         fresh = [c for c in commits if c.hash not in imported]
         if not fresh:
             continue
@@ -245,10 +310,11 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
                 log.warning("Импорт git-порции %s упал: %s", rel_repo, e)
                 continue
             groups = obj.get("groups") if isinstance(obj, dict) else None
+            commit_dates = {c.hash: c.date for c in chunk}
             for g in groups or []:
                 if not isinstance(g, dict) or not g.get("title"):
                     continue
-                await _apply_group(project, g, rel_repo, stats)
+                await _apply_group(project, g, rel_repo, stats, commit_dates)
                 stats["groups"] += 1
             imported.update(c.hash for c in chunk)
 
@@ -261,7 +327,26 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
     return stats
 
 
-async def _apply_group(project: Project, g: dict, repo: str, stats: dict) -> None:
+def _order_from_dates(commits: list[str], commit_dates: dict[str, str]) -> float:
+    """Свежая работа — выше в колонке: order = -дни от эпохи новейшего коммита группы."""
+    import datetime as dt
+
+    best = 0
+    for h in commits:
+        d = commit_dates.get(h)
+        if not d:
+            continue
+        try:
+            days = (dt.date.fromisoformat(d) - dt.date(1970, 1, 1)).days
+            best = max(best, days)
+        except ValueError:
+            continue
+    return -float(best)
+
+
+async def _apply_group(
+    project: Project, g: dict, repo: str, stats: dict, commit_dates: dict[str, str] | None = None
+) -> None:
     title = str(g["title"])[:300]
     description = str(g.get("description", ""))[:6000]
     commits = [str(c)[:16] for c in (g.get("commits") or [])[:40]]
@@ -337,6 +422,7 @@ async def _apply_group(project: Project, g: dict, repo: str, stats: dict) -> Non
             source="git",
             report=f"[git-импорт] Коммиты ({repo}): {commits_line}"[:8000],
             done_at=utcnow(),
+            order=_order_from_dates(commits, commit_dates or {}),
             extra={"commits": commits, "repo": repo, "files": files},
         )
         session.add(task)

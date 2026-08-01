@@ -207,6 +207,21 @@ const PERIODS = [
   { days: 0, label: "Вся история" },
 ];
 
+type GitRepo = {
+  path: string;
+  current_branch: string;
+  branches: string[];
+  last_commit: string;
+  total_commits: number;
+};
+
+type RepoConfig = {
+  checked: boolean;
+  branch: string;
+  days: number;
+  limit: number;
+};
+
 function GitImportModal({
   projectId,
   onClose,
@@ -216,10 +231,32 @@ function GitImportModal({
   onClose: () => void;
   onStarted: () => void;
 }) {
-  const [days, setDays] = useState(30);
-  const [limit, setLimit] = useState(150);
+  const [repos, setRepos] = useState<GitRepo[] | null>(null);
+  const [configs, setConfigs] = useState<Record<string, RepoConfig>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api<GitRepo[]>(`/projects/${projectId}/git/repos`)
+      .then((rs) => {
+        setRepos(rs);
+        const cfg: Record<string, RepoConfig> = {};
+        for (const r of rs) {
+          cfg[r.path] = { checked: true, branch: r.current_branch, days: 30, limit: 150 };
+        }
+        setConfigs(cfg);
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Ошибка");
+        setRepos([]);
+      });
+  }, [projectId]);
+
+  function update(path: string, patch: Partial<RepoConfig>) {
+    setConfigs((c) => ({ ...c, [path]: { ...c[path], ...patch } }));
+  }
+
+  const selectedCount = Object.values(configs).filter((c) => c.checked).length;
 
   async function start() {
     setBusy(true);
@@ -228,8 +265,14 @@ function GitImportModal({
       await api(`/projects/${projectId}/git/import`, {
         method: "POST",
         body: JSON.stringify({
-          since_days: days || null,
-          per_repo_limit: limit,
+          repos: Object.entries(configs)
+            .filter(([, c]) => c.checked)
+            .map(([path, c]) => ({
+              path,
+              branch: c.branch || null,
+              since_days: c.days || null,
+              limit: c.limit,
+            })),
         }),
       });
       onStarted();
@@ -241,44 +284,111 @@ function GitImportModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="card w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="card w-full max-w-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="font-medium">Импорт истории git</div>
         <div className="text-xs text-[var(--muted)] leading-relaxed">
-          ИИ сгруппирует коммиты (включая вложенные репозитории монорепо) в выполненные
-          работы: совпадающие открытые задачи закроются с отчётом, остальные лягут
-          в «Готово» с пометкой «из git». Уже импортированные коммиты пропускаются.
+          Выбери репозитории и настрой каждый: ветка, период, лимит коммитов. ИИ сгруппирует
+          коммиты в выполненные работы: полностью совпадающие открытые задачи закроются,
+          частично сделанные получат галочки на шагах плана. Уже импортированные коммиты
+          пропускаются, свежие работы ложатся сверху колонки «Готово».
         </div>
-        <div className="space-y-1.5">
-          <div className="text-sm">Период</div>
-          <div className="flex gap-2 flex-wrap">
-            {PERIODS.map((p) => (
-              <button
-                key={p.days}
-                type="button"
-                onClick={() => setDays(p.days)}
-                className={`chip cursor-pointer ${days === p.days ? "!text-[var(--accent)] !border-[var(--accent)]" : "hover:border-[var(--accent)]"}`}
-              >
-                {p.label}
-              </button>
-            ))}
+
+        {repos === null ? (
+          <div className="text-sm text-[var(--muted)]">Ищу репозитории…</div>
+        ) : repos.length === 0 ? (
+          <div className="text-sm text-[var(--muted)]">Git-репозитории не найдены</div>
+        ) : (
+          <div className="space-y-3">
+            {repos.map((r) => {
+              const c = configs[r.path];
+              if (!c) return null;
+              return (
+                <div
+                  key={r.path}
+                  className={`border rounded-lg p-3 space-y-2.5 ${
+                    c.checked ? "border-[var(--accent)]/50" : "border-[var(--border)] opacity-60"
+                  }`}
+                >
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1 accent-[var(--accent)] w-4 h-4"
+                      checked={c.checked}
+                      onChange={() => update(r.path, { checked: !c.checked })}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm font-mono font-medium truncate">
+                        {r.path === "." ? "(корень проекта)" : r.path}
+                      </div>
+                      <div className="text-xs text-[var(--muted)]">
+                        {r.total_commits} коммитов · последний: {r.last_commit || "—"}
+                      </div>
+                    </div>
+                  </label>
+                  {c.checked && (
+                    <div className="flex gap-3 flex-wrap items-end pl-6">
+                      <div className="space-y-1">
+                        <div className="text-[11px] text-[var(--muted)]">Ветка</div>
+                        <select
+                          className="input !w-44 text-xs"
+                          value={c.branch}
+                          onChange={(e) => update(r.path, { branch: e.target.value })}
+                        >
+                          {[r.current_branch, ...r.branches.filter((b) => b !== r.current_branch)].map(
+                            (b) => (
+                              <option key={b} value={b}>
+                                {b === r.current_branch ? `${b} (текущая)` : b}
+                              </option>
+                            )
+                          )}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[11px] text-[var(--muted)]">Период</div>
+                        <div className="flex gap-1.5">
+                          {PERIODS.map((p) => (
+                            <button
+                              key={p.days}
+                              type="button"
+                              onClick={() => update(r.path, { days: p.days })}
+                              className={`chip cursor-pointer text-[11px] ${
+                                c.days === p.days
+                                  ? "!text-[var(--accent)] !border-[var(--accent)]"
+                                  : "hover:border-[var(--accent)]"
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[11px] text-[var(--muted)]">Лимит</div>
+                        <input
+                          type="number"
+                          className="input !w-24 text-xs"
+                          min={10}
+                          max={1000}
+                          value={c.limit}
+                          onChange={(e) => update(r.path, { limit: Number(e.target.value) || 150 })}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </div>
-        <div className="space-y-1.5">
-          <div className="text-sm">Максимум коммитов на репозиторий</div>
-          <input
-            type="number"
-            className="input !w-32"
-            min={10}
-            max={1000}
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value) || 150)}
-          />
-        </div>
+        )}
+
         {error && <div className="text-sm text-red-400">{error}</div>}
         <div className="flex justify-end gap-2">
           <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn" onClick={start} disabled={busy}>
-            {busy ? "…" : "Импортировать"}
+          <button className="btn" onClick={start} disabled={busy || selectedCount === 0}>
+            {busy ? "…" : `Импортировать (${selectedCount})`}
           </button>
         </div>
       </div>

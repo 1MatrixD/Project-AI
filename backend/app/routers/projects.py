@@ -244,6 +244,20 @@ async def put_tool_access(
     return {"access": effective_access(meta)}
 
 
+@router.get("/{project_id}/git/repos")
+async def git_repos(project: Project = Depends(get_project)) -> list[dict]:
+    """Найденные git-репозитории проекта (включая вложенные) с ветками —
+    для настройки импорта per-репозиторий."""
+    import asyncio
+
+    from ..services.git_import import find_git_repos, repo_info
+
+    repos = await asyncio.to_thread(find_git_repos, project.root_path)
+    return await asyncio.gather(
+        *[asyncio.to_thread(repo_info, r, project.root_path) for r in repos]
+    )
+
+
 @router.post("/{project_id}/git/import")
 async def git_import_endpoint(
     body: dict | None = None, project: Project = Depends(get_project)
@@ -261,6 +275,20 @@ async def git_import_endpoint(
         params["since_days"] = max(1, min(3650, int(body["since_days"])))
     if body.get("per_repo_limit"):
         params["per_repo_limit"] = max(1, min(1000, int(body["per_repo_limit"])))
+    if isinstance(body.get("repos"), list):
+        # per-repo конфиги: [{path, branch?, since_days?, limit?}]
+        params["repos"] = [
+            {
+                "path": str(rc.get("path", ""))[:500],
+                "branch": str(rc["branch"])[:100] if rc.get("branch") else None,
+                "since_days": max(1, min(3650, int(rc["since_days"]))) if rc.get("since_days") else None,
+                "limit": max(1, min(1000, int(rc.get("limit", 150)))),
+            }
+            for rc in body["repos"]
+            if isinstance(rc, dict) and rc.get("path")
+        ][:20]
+        if not params["repos"]:
+            raise HTTPException(status_code=400, detail="Не выбран ни один репозиторий")
     job = await runner.submit(project.id, "git_import", params)
     return {"job_id": str(job.id)}
 
