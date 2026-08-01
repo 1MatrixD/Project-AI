@@ -12,13 +12,17 @@ import json
 import os
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+
+try:  # mcp SDK 2.x
+    from mcp.server import MCPServer
+except ImportError:  # mcp SDK 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer
 
 API_URL = os.environ.get("PROJECTAI_API_URL", "http://localhost:8010").rstrip("/")
 TOKEN = os.environ.get("PROJECTAI_TOKEN", "")
 PROJECT_ID = os.environ.get("PROJECTAI_PROJECT_ID", "")
 
-mcp = FastMCP(
+mcp = MCPServer(
     "projectai",
     instructions=(
         "Инструменты проекта в системе «Проекты ИИ»: карта знаний (Neo4j), материалы "
