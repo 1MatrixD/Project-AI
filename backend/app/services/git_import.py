@@ -40,7 +40,7 @@ GIT_IMPORT_PROMPT = """Проект «{project_name}», репозиторий `
 Соглашения проекта:
 {decisions}
 
-Существующие задачи канбана (title [статус]):
+Существующие задачи канбана (с планами; номера шагов — для пометки выполненного):
 {existing_tasks}
 
 Коммиты (новые, ещё не импортированные; от новых к старым):
@@ -54,13 +54,18 @@ GIT_IMPORT_PROMPT = """Проект «{project_name}», репозиторий `
       "description": "что сделано, судя по коммитам и файлам (по-русски, конкретно)",
       "commits": ["короткие_хэши"],
       "files": ["до 15 ключевых файлов"],
-      "matches_existing_task": "ТОЧНОЕ название существующей задачи из списка или null"
+      "matches_existing_task": "ТОЧНОЕ название существующей задачи из списка или null",
+      "coverage": "full|partial",
+      "completed_plan_steps": [1, 3]
     }}
   ]
 }}
 Правила:
 - Группируй связанные коммиты в одну работу (фича/фикс), не дроби на каждый коммит.
 - matches_existing_task заполняй ТОЛЬКО при явном смысловом совпадении с существующей задачей.
+- coverage: "full" — коммиты полностью закрывают задачу; "partial" — сделана только часть.
+  При partial перечисли в completed_plan_steps НОМЕРА выполненных шагов плана этой задачи
+  (по нумерации из списка выше). Задача при partial НЕ закрывается — только шаги.
 - Пропускай шумовые коммиты (bump версий, форматирование, merge) — не создавай из них групп.
 - Пути файлов указывай с префиксом `{repo_prefix}` (относительно корня проекта).
 - НИКАКОГО текста вне JSON."""
@@ -139,6 +144,33 @@ def read_git_log(repo: str, limit: int = 150, since_days: int | None = None) -> 
     return commits
 
 
+async def _existing_tasks_with_plans(project_id: uuid.UUID) -> str:
+    """Задачи с нумерованными шагами плана — чтобы ИИ мог пометить сделанные шаги."""
+    async with get_sessionmaker()() as session:
+        res = await session.execute(
+            select(TaskItem)
+            .where(TaskItem.project_id == project_id)
+            .order_by(TaskItem.created_at.desc())
+            .limit(60)
+        )
+        rows = list(res.scalars())
+    status_ru = {
+        "planned": "запланирована",
+        "in_progress": "в работе",
+        "review": "на ревью",
+        "done": "СДЕЛАНА",
+        "cancelled": "отменена",
+    }
+    lines: list[str] = []
+    for t in rows:
+        lines.append(f"- «{t.title}» [{status_ru.get(t.status, t.status)}]")
+        for i, step in enumerate(t.plan or [], start=1):
+            if isinstance(step, dict):
+                mark = "сделан" if step.get("done") else "не сделан"
+                lines.append(f"    {i}) {str(step.get('text', ''))[:150]} [{mark}]")
+    return "\n".join(lines) or "(задач ещё нет)"
+
+
 def _fmt_commits(commits: list[Commit]) -> str:
     lines = []
     for c in commits:
@@ -168,8 +200,6 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
     if not repos:
         return {"repos": 0, "commits_new": 0, "tasks_created": 0, "tasks_closed": 0}
 
-    from .task_enrich import list_existing_tasks_text
-
     context = await graphdb.get_project_summary_context(str(project_id), 3000)
     decisions = await get_decisions_text(project_id)
 
@@ -191,7 +221,7 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
         # порции, чтобы промпт не разрастался
         for chunk_start in range(0, len(fresh), 60):
             chunk = fresh[chunk_start : chunk_start + 60]
-            existing = await list_existing_tasks_text(project_id)
+            existing = await _existing_tasks_with_plans(project_id)
             prompt = GIT_IMPORT_PROMPT.format(
                 project_name=project.name,
                 repo=rel_repo or ".",
@@ -240,6 +270,9 @@ async def _apply_group(project: Project, g: dict, repo: str, stats: dict) -> Non
     commits_line = ", ".join(commits)
     pid = str(project.id)
 
+    coverage = str(g.get("coverage", "full"))
+    steps = [int(x) for x in (g.get("completed_plan_steps") or []) if str(x).isdigit()]
+
     async with get_sessionmaker()() as session:
         if matches:
             res = await session.execute(
@@ -251,6 +284,33 @@ async def _apply_group(project: Project, g: dict, repo: str, stats: dict) -> Non
             )
             task = res.scalar_one_or_none()
             if task is not None:
+                if coverage == "partial":
+                    # закрываем только выполненные шаги плана, задача остаётся открытой
+                    plan = list(task.plan or [])
+                    marked = 0
+                    for n in steps:
+                        if 1 <= n <= len(plan) and isinstance(plan[n - 1], dict):
+                            if not plan[n - 1].get("done"):
+                                plan[n - 1] = {**plan[n - 1], "done": True}
+                                marked += 1
+                    task.plan = plan
+                    if task.status == "planned":
+                        task.status = "in_progress"
+                    note = (
+                        f"[git-импорт] Частично выполнено коммитами ({repo}): {commits_line}."
+                        f" Шаги плана: {', '.join(map(str, steps)) or '—'}.\n{description}"
+                    )
+                    task.report = (f"{task.report}\n\n{note}" if task.report else note)[:8000]
+                    task.extra = {
+                        **(task.extra or {}),
+                        "commits": [*(task.extra or {}).get("commits", []), *commits][:80],
+                        "repo": repo,
+                    }
+                    await session.commit()
+                    await graphdb.upsert_task_node(pid, str(task.id), task.title, task.status, files)
+                    stats["tasks_partial"] = stats.get("tasks_partial", 0) + 1
+                    stats["plan_steps_marked"] = stats.get("plan_steps_marked", 0) + marked
+                    return
                 task.status = "done"
                 task.done_at = utcnow()
                 task.report = (

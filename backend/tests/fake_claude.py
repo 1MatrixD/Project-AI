@@ -95,6 +95,19 @@ def answer_for(prompt: str) -> str:
                     "commits": hashes[:1],
                     "files": ["main.py"],
                     "matches_existing_task": "Сделать фичу А",
+                    "coverage": "full",
+                }
+            )
+        if "Частичная фича В" in prompt and hashes:
+            groups.append(
+                {
+                    "title": "Частичный прогресс по фиче В",
+                    "description": "Сделан только первый шаг.",
+                    "commits": hashes[:1],
+                    "files": ["main.py"],
+                    "matches_existing_task": "Частичная фича В",
+                    "coverage": "partial",
+                    "completed_plan_steps": [1],
                 }
             )
         return json.dumps({"groups": groups}, ensure_ascii=False)

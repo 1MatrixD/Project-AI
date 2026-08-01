@@ -122,8 +122,14 @@ async def test_git_import(user_client: httpx.AsyncClient, sample_project_dir: Pa
     job = await latest_job(user_client, pid, "index")
     await wait_job(user_client, pid, job["id"])
 
-    # существующая открытая задача, которую коммиты должны закрыть
+    # существующая открытая задача, которую коммиты должны закрыть целиком
     await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Сделать фичу А"})
+    # и задача, сделанная наполовину: закрыться должен только шаг 1 плана
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks",
+        json={"title": "Частичная фича В", "plan": ["сделать бэк", "сделать фронт"]},
+    )
+    partial_id = r.json()["id"]
 
     r = await user_client.post(
         f"/api/projects/{pid}/git/import",
@@ -145,6 +151,15 @@ async def test_git_import(user_client: httpx.AsyncClient, sample_project_dir: Pa
     closed = next(t for t in tasks if t["title"] == "Сделать фичу А")
     assert closed["status"] == "done"
     assert "Подтверждено коммитами" in closed["report"]
+
+    # частично сделанная: шаг 1 отмечен, задача НЕ закрыта, перешла в работу
+    partial = next(t for t in tasks if t["id"] == partial_id)
+    assert partial["status"] == "in_progress"
+    assert partial["plan"][0]["done"] is True
+    assert partial["plan"][1]["done"] is False
+    assert "Частично выполнено коммитами" in partial["report"]
+    assert job["stats"]["tasks_partial"] == 1
+    assert job["stats"]["plan_steps_marked"] == 1
 
     # повторный импорт не плодит дубликаты
     r = await user_client.post(f"/api/projects/{pid}/git/import")
