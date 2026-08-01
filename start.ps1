@@ -49,7 +49,7 @@ if (Test-PortBusy 3010) {
 } else {
     Start-Process powershell -ArgumentList @(
         "-NoExit", "-Command",
-        "`$host.UI.RawUI.WindowTitle='Проекты ИИ — фронтенд (3010)'; Set-Location '$root\frontend'; npm run dev -- -p 3010"
+        "`$host.UI.RawUI.WindowTitle='Проекты ИИ — фронтенд (3010)'; Set-Location '$root\frontend'; npm run dev"
     )
 }
 
