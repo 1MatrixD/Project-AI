@@ -217,6 +217,14 @@ async def task_enrich(task_id: str | None = None) -> str:
 
 
 @mcp.tool()
+async def task_plan(task_id: str) -> str:
+    """Планировщик: ИИ исследует кодовую базу, строит общий план и разбивает крупную
+    задачу на подзадачи канбана с зависимостями (что за чем делать; независимые —
+    параллельно). Выполняется в фоне."""
+    return _fmt(await _post(f"{P}/tasks/{task_id}/plan"))
+
+
+@mcp.tool()
 async def request_reindex(mode: str = "update") -> str:
     """Запустить фоновое обновление индекса проекта. mode: update (только изменения)
     или reverify (перепроверить всё)."""
@@ -241,7 +249,7 @@ def _apply_tool_access() -> None:
     for tool_name in [
         "project_overview", "graph_search", "graph_cypher", "component_info", "file_info",
         "list_files", "list_documents", "read_document", "rlm_query", "task_list",
-        "task_create", "task_update", "task_move", "task_done", "task_enrich", "log_work",
+        "task_create", "task_update", "task_move", "task_done", "task_enrich", "task_plan", "log_work",
         "list_decisions", "record_decision", "request_reindex", "git_import",
     ]:
         if tool_name not in allowed:

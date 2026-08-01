@@ -344,6 +344,38 @@ async def upsert_task_node(project_id: str, task_id: str, title: str, status: st
             )
 
 
+async def link_task_dependencies(
+    project_id: str, task_id: str, depends_on: list[str], parent: str | None = None
+) -> None:
+    """Рёбра планировщика: подзадача -[:DEPENDS_ON]-> блокирующая, -[:SUBTASK_OF]-> родитель."""
+    if not depends_on and not parent:
+        return
+    async with get_driver().session() as s:
+        if depends_on:
+            await s.run(
+                """
+                MATCH (t:Task {uid: $pid + '|task|' + $tid})
+                UNWIND $deps AS d
+                MATCH (o:Task {uid: $pid + '|task|' + d})
+                MERGE (t)-[:DEPENDS_ON]->(o)
+                """,
+                pid=project_id,
+                tid=task_id,
+                deps=depends_on,
+            )
+        if parent:
+            await s.run(
+                """
+                MATCH (t:Task {uid: $pid + '|task|' + $tid})
+                MATCH (p:Task {uid: $pid + '|task|' + $parent})
+                MERGE (t)-[:SUBTASK_OF]->(p)
+                """,
+                pid=project_id,
+                tid=task_id,
+                parent=parent,
+            )
+
+
 async def get_task_files(project_id: str, task_id: str) -> list[dict]:
     """Файлы, которых касается задача (связи AFFECTS), с ролями из карты знаний."""
     async with get_driver().session(default_access_mode="READ") as s:

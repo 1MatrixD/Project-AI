@@ -31,6 +31,7 @@ const JOB_LABELS: Record<string, string> = {
   knowledge_update: "Обновление карты знаний",
   verify_tasks: "ИИ-проверка задач",
   enrich_tasks: "RLM-проработка задач",
+  plan_task: "Планировщик задачи",
   git_import: "Импорт истории git",
   process_material: "Обработка материала",
   plugin_generate: "Генерация плагина",

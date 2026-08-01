@@ -247,6 +247,21 @@ async def enrich_tasks_endpoint(
     return {"job_id": str(job.id)}
 
 
+@router.post("/tasks/{task_id}/plan")
+async def plan_one_task(
+    task_id: uuid.UUID,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Планировщик: ИИ исследует кодовую базу, строит общий план и декомпозирует
+    задачу в подзадачи канбана с зависимостями (depends_on)."""
+    await _get_task(session, project, task_id)
+    if await runner.has_active(project.id, ["plan_task"]):
+        raise HTTPException(status_code=409, detail="Планирование уже идёт")
+    job = await runner.submit(project.id, "plan_task", {"task_id": str(task_id)})
+    return {"job_id": str(job.id)}
+
+
 @router.post("/tasks/{task_id}/enrich")
 async def enrich_one_task(
     task_id: uuid.UUID,

@@ -124,6 +124,36 @@ def answer_for(prompt: str) -> str:
         )
     if '"groups"' in prompt or "групп файлов для рекурсивного анализа" in prompt:
         return json.dumps({"groups": [{"focus": "тест", "paths": ["main.py"]}]}, ensure_ascii=False)
+    if "Разбей задачу на подзадачи" in prompt:
+        return json.dumps(
+            {
+                "plan_summary": "Сначала модель данных, затем API поверх неё, в конце экран на фронте.",
+                "subtasks": [
+                    {
+                        "title": "Подзадача: модель и миграция",
+                        "description": "Добавить модель в main.py",
+                        "plan": ["описать модель", "миграция"],
+                        "files": ["main.py"],
+                        "depends_on": [],
+                    },
+                    {
+                        "title": "Подзадача: API-эндпоинт",
+                        "description": "Эндпоинт поверх модели",
+                        "plan": ["хендлер", "тест"],
+                        "files": ["main.py"],
+                        "depends_on": [0],
+                    },
+                    {
+                        "title": "Подзадача: экран на фронте",
+                        "description": "Экран, дергающий API",
+                        "plan": ["компонент"],
+                        "files": ["src/util.py"],
+                        "depends_on": [1, 99, 2],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        )
     if "прорабатываешь короткую задачу в детальную" in prompt:
         return json.dumps(
             {

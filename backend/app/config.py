@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     whisper_model: str = "large-v3"
     whisper_device: str = "auto"
 
+    # наблюдение за каталогом: пауза после последнего изменения до запуска индекса
+    watch_debounce_sec: float = 20.0
+
     @property
     def data_path(self) -> Path:
         p = Path(self.data_dir)

@@ -137,6 +137,35 @@ async def start_index(
     return {"job_id": str(job.id), "status": job.status}
 
 
+@router.post("/{project_id}/watch")
+async def set_watch(
+    body: dict,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Наблюдение за каталогом: изменения в коде автоматически запускают
+    инкрементальное обновление индекса (с дебаунсом). Состояние переживает
+    рестарт сервера (meta.watch)."""
+    from ..services.watcher import watcher
+
+    enabled = bool(body.get("enabled"))
+    if enabled:
+        try:
+            watcher.start_watch(project.id, project.root_path)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Наблюдение не запустилось: {e}")
+    else:
+        watcher.stop_watch(project.id)
+    db_project = await session.get(Project, project.id)
+    meta = dict(db_project.meta)
+    meta["watch"] = enabled
+    db_project.meta = meta
+    await session.commit()
+    return {"watch": enabled}
+
+
 @router.get("/{project_id}/changes", response_model=list[ChangeReportOut])
 async def list_changes(
     project: Project = Depends(get_project), session: AsyncSession = Depends(get_session)

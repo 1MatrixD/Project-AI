@@ -28,6 +28,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "task_move",
         "task_done",
         "task_enrich",
+        "task_plan",
         "log_work",
     ],
     "decisions": ["list_decisions", "record_decision"],

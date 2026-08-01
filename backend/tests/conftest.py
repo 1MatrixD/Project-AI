@@ -48,6 +48,7 @@ os.environ.update(
         "AI_BATCH_SIZE": "5",
         "AI_CONCURRENCY": "2",
         "CLAUDE_TIMEOUT_SEC": "60",
+        "WATCH_DEBOUNCE_SEC": "0.5",
     }
 )
 
@@ -75,7 +76,7 @@ async def client():
     from app.db import init_db
     from app.jobs_runner import runner
     from app.main import app
-    from app.services import git_import, graphdb, indexer, task_enrich
+    from app.services import git_import, graphdb, indexer, planner, task_enrich
     from app.services.materials import process_material
     from app.services.plugin_gen import plugin_generate_job
 
@@ -88,6 +89,7 @@ async def client():
     runner.register("knowledge_update", indexer.knowledge_update)
     runner.register("verify_tasks", indexer.verify_tasks)
     runner.register("enrich_tasks", task_enrich.enrich_tasks)
+    runner.register("plan_task", planner.plan_task)
     runner.register("git_import", git_import.git_import)
     runner.register("process_material", process_material)
     runner.register("plugin_generate", plugin_generate_job)
@@ -97,6 +99,9 @@ async def client():
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
+    from app.services.watcher import watcher
+
+    watcher.shutdown()
     await runner.stop()
     await graphdb.close_driver()
 

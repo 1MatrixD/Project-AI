@@ -16,6 +16,7 @@ export type Project = {
       how_to?: Record<string, string>;
     };
     stats?: { files_total: number; by_kind: Record<string, number>; analyzed: number };
+    watch?: boolean;
   };
   created_at: string;
   updated_at: string;
@@ -78,6 +79,13 @@ export type TaskExtra = {
   files?: string[];
   related?: { title: string; relation: string; note: string }[];
   duplicate_of?: string | null;
+  // планировщик: у родителя — planned/plan_summary/subtasks, у подзадач — parent/depends_on
+  planned?: boolean;
+  plan_summary?: string;
+  subtasks?: string[];
+  parent_task?: string;
+  parent_title?: string;
+  depends_on?: string[];
 };
 
 export type Task = {

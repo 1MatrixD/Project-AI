@@ -22,7 +22,15 @@ const SOURCE_LABEL: Record<string, string> = {
   meeting: "из созвона",
   doc: "из документа",
   git: "из git",
+  plan: "из плана",
 };
+
+/** Зависимости подзадачи, ещё не доведённые до «Готово». */
+function openDeps(task: Task, all: Task[]): Task[] {
+  return (task.extra?.depends_on ?? [])
+    .map((id) => all.find((t) => t.id === id))
+    .filter((t): t is Task => !!t && t.status !== "done" && t.status !== "cancelled");
+}
 
 const RELATION_LABEL: Record<string, string> = {
   duplicate: "дубликат",
@@ -140,6 +148,7 @@ export default function KanbanTab({
               </div>
               {colTasks.map((t) => {
                 const planDone = t.plan.filter((p) => p.done).length;
+                const waiting = t.status !== "done" ? openDeps(t, tasks) : [];
                 return (
                   <div
                     key={t.id}
@@ -158,6 +167,19 @@ export default function KanbanTab({
                       )}
                       {t.extra?.enriched && (
                         <span className="chip text-[var(--accent-2)]">🧠 RLM</span>
+                      )}
+                      {t.extra?.planned && (
+                        <span className="chip text-[var(--accent)]" title="Декомпозирована планировщиком на подзадачи">
+                          🗂 {t.extra.subtasks?.length ?? 0} подзадач
+                        </span>
+                      )}
+                      {waiting.length > 0 && (
+                        <span
+                          className="chip text-amber-300"
+                          title={`Сначала: ${waiting.map((d) => d.title).join("; ")}`}
+                        >
+                          ⛓ ждёт {waiting.length}
+                        </span>
                       )}
                       {t.extra?.duplicate_of && (
                         <span className="chip text-amber-300">дубликат?</span>
@@ -181,6 +203,8 @@ export default function KanbanTab({
         <TaskModal
           projectId={projectId}
           task={selected}
+          allTasks={tasks}
+          onOpenTask={(id) => setSelectedId(id)}
           onClose={() => setSelectedId(null)}
           onChanged={(keepOpen) => {
             if (!keepOpen) setSelectedId(null);
@@ -195,11 +219,15 @@ export default function KanbanTab({
 function TaskModal({
   projectId,
   task,
+  allTasks,
+  onOpenTask,
   onClose,
   onChanged,
 }: {
   projectId: string;
   task: Task;
+  allTasks: Task[];
+  onOpenTask: (id: string) => void;
   onClose: () => void;
   onChanged: (keepOpen?: boolean) => void;
 }) {
@@ -208,7 +236,12 @@ function TaskModal({
   const [report, setReport] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [enriching, setEnriching] = useState(false);
+  const [info, setInfo] = useState("");
   const [detail, setDetail] = useState<TaskDetail | null>(null);
+
+  const byId = (id: string) => allTasks.find((t) => t.id === id);
+  const deps = (task.extra?.depends_on ?? []).map(byId).filter((t): t is Task => !!t);
+  const subtasks = (task.extra?.subtasks ?? []).map(byId).filter((t): t is Task => !!t);
 
   useEffect(() => {
     setTitle(task.title);
@@ -251,6 +284,17 @@ function TaskModal({
     }
   }
 
+  async function decompose() {
+    setInfo("");
+    try {
+      await api(`/projects/${projectId}/tasks/${task.id}/plan`, { method: "POST" });
+      setInfo("Планировщик запущен: общий план и подзадачи с зависимостями появятся в «Запланировано».");
+    } catch (e) {
+      setInfo(e instanceof Error ? e.message : "Ошибка");
+    }
+    onChanged(true);
+  }
+
   async function markDone() {
     if (!report.trim()) return;
     await api(`/projects/${projectId}/tasks/${task.id}/done`, {
@@ -279,11 +323,56 @@ function TaskModal({
           >
             🧠 {task.extra?.enriched ? "Переработать" : "Проработать"}
           </button>
+          {task.status !== "done" && (
+            <button
+              className="btn btn-ghost whitespace-nowrap"
+              onClick={decompose}
+              title="Планировщик: ИИ построит общий план и разобьёт задачу на подзадачи с зависимостями"
+            >
+              🗂 {task.extra?.planned ? "Перепланировать" : "Декомпозировать"}
+            </button>
+          )}
         </div>
+
+        {info && <div className="text-sm text-[var(--accent)]">{info}</div>}
+
+        {task.extra?.parent_title && (
+          <div className="text-xs text-[var(--muted)]">
+            Подзадача из декомпозиции:{" "}
+            {task.extra.parent_task && byId(task.extra.parent_task) ? (
+              <button
+                className="text-[var(--accent)] hover:underline"
+                onClick={() => onOpenTask(task.extra!.parent_task!)}
+              >
+                «{task.extra.parent_title}»
+              </button>
+            ) : (
+              <>«{task.extra.parent_title}»</>
+            )}
+          </div>
+        )}
 
         {task.extra?.duplicate_of && (
           <div className="text-sm text-amber-300">
             ⚠️ Возможный дубликат: «{task.extra.duplicate_of}»
+          </div>
+        )}
+
+        {deps.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Зависит от</div>
+            {deps.map((d) => (
+              <button
+                key={d.id}
+                className="flex items-center gap-2 text-xs w-full text-left px-2 py-1 -mx-2 rounded-lg hover:bg-[var(--surface-2)]"
+                onClick={() => onOpenTask(d.id)}
+              >
+                <span>{d.status === "done" ? "✅" : "⏳"}</span>
+                <span className={d.status === "done" ? "text-[var(--muted)] line-through" : ""}>
+                  {d.title}
+                </span>
+              </button>
+            ))}
           </div>
         )}
 
@@ -293,6 +382,38 @@ function TaskModal({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+
+        {task.extra?.plan_summary && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">План решения</div>
+            <div className="text-xs text-[var(--muted)] leading-relaxed whitespace-pre-wrap">
+              {task.extra.plan_summary}
+            </div>
+          </div>
+        )}
+
+        {subtasks.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Подзадачи{" "}
+              <span className="text-[var(--muted)] font-normal">
+                {subtasks.filter((s) => s.status === "done").length}/{subtasks.length}
+              </span>
+            </div>
+            {subtasks.map((s) => (
+              <button
+                key={s.id}
+                className="flex items-center gap-2 text-xs w-full text-left px-2 py-1 -mx-2 rounded-lg hover:bg-[var(--surface-2)]"
+                onClick={() => onOpenTask(s.id)}
+              >
+                <span>{s.status === "done" ? "✅" : s.status === "in_progress" ? "🔧" : "▫️"}</span>
+                <span className={s.status === "done" ? "text-[var(--muted)] line-through" : ""}>
+                  {s.title}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {task.plan.length > 0 && (
           <div className="space-y-1.5">

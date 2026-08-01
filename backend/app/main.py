@@ -11,9 +11,10 @@ from .config import get_settings
 from .db import init_db
 from .jobs_runner import runner
 from .routers import auth, chats, decisions, files, fs, jobs, materials, projects, tasks
-from .services import git_import, graphdb, indexer, task_enrich
+from .services import git_import, graphdb, indexer, planner, task_enrich
 from .services.materials import process_material
 from .services.plugin_gen import plugin_generate_job
+from .services.watcher import watcher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,14 +44,17 @@ async def lifespan(app: FastAPI):
     runner.register("knowledge_update", indexer.knowledge_update)
     runner.register("verify_tasks", indexer.verify_tasks)
     runner.register("enrich_tasks", task_enrich.enrich_tasks)
+    runner.register("plan_task", planner.plan_task)
     runner.register("git_import", git_import.git_import)
     runner.register("process_material", process_material)
     runner.register("plugin_generate", plugin_generate_job)
     await runner.start()
+    await watcher.resume_all()
 
     log.info("Проекты ИИ: API готов на порту %d", get_settings().api_port)
     yield
 
+    watcher.shutdown()
     await runner.stop()
     await graphdb.close_driver()
 

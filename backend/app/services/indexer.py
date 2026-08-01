@@ -360,7 +360,11 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         overview = None
         raw_limit = params.get("ai_limit")
         limit = s.ai_max_files_per_run if raw_limit is None else int(raw_limit)
-        if s.ai_analysis_enabled and params.get("ai", True) and limit > 0:
+        # watch-триггер без реальных изменений (шумовое событие ФС) — ИИ-бюджет не тратим
+        watch_noop = params.get("trigger") == "watch" and not (
+            diff.added or diff.modified or diff.deleted
+        )
+        if s.ai_analysis_enabled and params.get("ai", True) and limit > 0 and not watch_noop:
             await runner.report(job_id, 0.25, "ИИ-анализ файлов")
             ai_stats = await _run_ai_analysis(
                 job_id, project, limit, 0.25, 0.55, retry_errors=bool(params.get("retry_errors"))

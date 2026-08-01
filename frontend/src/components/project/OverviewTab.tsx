@@ -29,10 +29,15 @@ export default function OverviewTab({
   const [showGitImport, setShowGitImport] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true);
+  const [watch, setWatch] = useState(false);
 
   useEffect(() => {
     setAutoContinue(localStorage.getItem("projectai_auto_continue") !== "0");
   }, []);
+
+  useEffect(() => {
+    setWatch(!!project.meta.watch);
+  }, [project.meta.watch]);
 
   useEffect(() => {
     if (!showMenu) return;
@@ -46,6 +51,21 @@ export default function OverviewTab({
   function toggleAutoContinue(v: boolean) {
     setAutoContinue(v);
     localStorage.setItem("projectai_auto_continue", v ? "1" : "0");
+  }
+
+  async function toggleWatch(v: boolean) {
+    setWatch(v);
+    setError("");
+    try {
+      await api(`/projects/${project.id}/watch`, {
+        method: "POST",
+        body: JSON.stringify({ enabled: v }),
+      });
+      onAction();
+    } catch (e) {
+      setWatch(!v);
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
   }
   const overview = project.meta.overview;
   const stats = project.meta.stats;
@@ -130,6 +150,23 @@ export default function OverviewTab({
                         Анализ до конца бэклога
                         <span className="block text-[11px] text-[var(--muted)]">
                           продолжать порциями, пока все файлы не проанализированы
+                        </span>
+                      </span>
+                    </label>
+                    <label
+                      className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer select-none"
+                      title="Работает, пока запущен сервер; состояние сохраняется"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 accent-[var(--accent)]"
+                        checked={watch}
+                        onChange={(e) => toggleWatch(e.target.checked)}
+                      />
+                      <span className="text-sm">
+                        Наблюдение за каталогом
+                        <span className="block text-[11px] text-[var(--muted)]">
+                          правки в коде сами запускают обновление индекса
                         </span>
                       </span>
                     </label>
