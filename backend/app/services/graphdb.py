@@ -426,7 +426,20 @@ async def get_graph_view(project_id: str, limit: int = 400) -> dict:
             """
             MATCH (n)
             WHERE n.project_id = $pid AND NOT n:Directory
-            WITH n LIMIT $limit
+            WITH n, CASE
+                WHEN n:Project THEN 0
+                WHEN n:Component THEN 1
+                WHEN n:Task THEN 2
+                WHEN n:Document THEN 3
+                WHEN n:WorkLog THEN 4
+                WHEN n:Entity THEN 5
+                WHEN n.summary IS NOT NULL AND n.summary <> '' THEN 6
+                ELSE 7
+            END AS prio
+            ORDER BY prio
+            LIMIT $limit
+            WITH collect(n) AS ns
+            UNWIND ns AS n
             OPTIONAL MATCH (n)-[r]-(m)
             WHERE m.project_id = $pid AND NOT m:Directory
             RETURN collect(DISTINCT {uid: n.uid, labels: labels(n),
