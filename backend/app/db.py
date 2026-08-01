@@ -40,13 +40,27 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    from sqlalchemy import text
-
     from . import models  # noqa: F401 — регистрация моделей
 
     async with get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # лёгкие идемпотентные миграции для существующих установок
-        await conn.execute(
-            text("ALTER TABLE task_items ADD COLUMN IF NOT EXISTS extra JSONB DEFAULT '{}'::jsonb")
-        )
+        await conn.run_sync(_run_migrations)
+
+
+def _run_migrations(sync_conn) -> None:
+    """Alembic-миграции до head. Установки, созданные до перехода на alembic
+    (create_all без alembic_version), помечаются базовой ревизией."""
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect
+
+    backend_root = Path(__file__).resolve().parents[1]
+    cfg = Config(str(backend_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_root / "alembic"))
+    cfg.attributes["connection"] = sync_conn
+
+    insp = inspect(sync_conn)
+    if insp.has_table("projects") and not insp.has_table("alembic_version"):
+        command.stamp(cfg, "0001")
+    command.upgrade(cfg, "head")
