@@ -1,8 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, fmtDate } from "@/lib/api";
 import type { PlanStep, Task, TaskStatus } from "@/lib/types";
+
+type TaskDetail = {
+  files: { path: string; role: string | null; summary: string | null }[];
+  worklog: { id: string; description: string; files: string[]; created_at: string }[];
+};
 
 const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
   { key: "planned", label: "Запланировано", accent: "border-t-sky-500" },
@@ -203,11 +208,19 @@ function TaskModal({
   const [report, setReport] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [enriching, setEnriching] = useState(false);
+  const [detail, setDetail] = useState<TaskDetail | null>(null);
 
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description);
   }, [task.id, task.title, task.description]);
+
+  useEffect(() => {
+    setDetail(null);
+    api<TaskDetail>(`/projects/${projectId}/tasks/${task.id}/detail`)
+      .then(setDetail)
+      .catch(() => {});
+  }, [projectId, task.id, task.updated_at]);
 
   async function save() {
     await api(`/projects/${projectId}/tasks/${task.id}`, {
@@ -306,14 +319,42 @@ function TaskModal({
           </div>
         )}
 
-        {(task.extra?.files?.length ?? 0) > 0 && (
+        {(detail ? detail.files.length > 0 : (task.extra?.files?.length ?? 0) > 0) && (
           <div className="space-y-1">
-            <div className="text-sm font-medium">Ключевые файлы</div>
-            <div className="flex flex-col gap-0.5">
-              {task.extra!.files!.slice(0, 12).map((f) => (
-                <code key={f} className="text-xs text-[var(--accent)] font-mono break-all">{f}</code>
-              ))}
+            <div className="text-sm font-medium">
+              Файлы задачи{" "}
+              <span className="text-[var(--muted)] font-normal text-xs">из карты знаний</span>
             </div>
+            <div className="flex flex-col gap-1">
+              {detail
+                ? detail.files.slice(0, 15).map((f) => (
+                    <div key={f.path} className="text-xs leading-relaxed">
+                      <code className="text-[var(--accent)] font-mono break-all">{f.path}</code>
+                      {f.role && <span className="text-[var(--muted)]"> — {f.role}</span>}
+                    </div>
+                  ))
+                : task.extra!.files!.slice(0, 12).map((f) => (
+                    <code key={f} className="text-xs text-[var(--accent)] font-mono break-all">{f}</code>
+                  ))}
+            </div>
+          </div>
+        )}
+
+        {(detail?.worklog.length ?? 0) > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-sm font-medium">История работ</div>
+            {detail!.worklog.map((w) => (
+              <div key={w.id} className="border-l-2 border-[var(--border)] pl-3 space-y-0.5">
+                <div className="text-[10px] text-[var(--muted)]">{fmtDate(w.created_at)}</div>
+                <div className="text-xs leading-relaxed whitespace-pre-wrap">{w.description}</div>
+                {w.files.length > 0 && (
+                  <div className="text-[10px] text-[var(--muted)] font-mono break-all">
+                    {w.files.slice(0, 8).join(", ")}
+                    {w.files.length > 8 ? ` и ещё ${w.files.length - 8}` : ""}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
 

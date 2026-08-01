@@ -90,6 +90,7 @@ export type Task = {
   extra: TaskExtra;
   report: string | null;
   created_at: string;
+  updated_at: string;
   done_at: string | null;
 };
 

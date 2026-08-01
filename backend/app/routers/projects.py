@@ -206,6 +206,21 @@ async def ask(data: AskIn, project: Project = Depends(get_project)) -> AskOut:
     return AskOut(**result)
 
 
+@router.get("/{project_id}/export/markdown")
+async def export_markdown_endpoint(project: Project = Depends(get_project)):
+    """Дамп карты знаний в markdown — для людей и внешних инструментов."""
+    from fastapi.responses import Response
+
+    from ..services.export import export_markdown
+
+    content = await export_markdown(project)
+    return Response(
+        content=content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="knowledge-map.md"'},
+    )
+
+
 @router.get("/{project_id}/tool-access")
 async def get_tool_access(
     project: Project = Depends(get_project), surface: str | None = None

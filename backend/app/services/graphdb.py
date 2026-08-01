@@ -344,6 +344,26 @@ async def upsert_task_node(project_id: str, task_id: str, title: str, status: st
             )
 
 
+async def get_task_files(project_id: str, task_id: str) -> list[dict]:
+    """Файлы, которых касается задача (связи AFFECTS), с ролями из карты знаний."""
+    async with get_driver().session(default_access_mode="READ") as s:
+        res = await s.run(
+            """
+            MATCH (t:Task {uid: $pid + '|task|' + $tid})-[:AFFECTS]->(f:File)
+            RETURN f.path AS path, f.role AS role, f.summary AS summary
+            ORDER BY f.path
+            LIMIT 50
+            """,
+            pid=project_id,
+            tid=task_id,
+        )
+        return [
+            {"path": r["path"], "role": r["role"], "summary": r["summary"]}
+            async for r in res
+            if r["path"]
+        ]
+
+
 async def upsert_worklog_node(project_id: str, entry_id: str, description: str, files: list[str]) -> None:
     async with get_driver().session() as s:
         await s.run(

@@ -176,6 +176,42 @@ async def mark_done(
     return TaskOut.model_validate(task)
 
 
+@router.get("/tasks/{task_id}/detail")
+async def task_detail(
+    task_id: uuid.UUID,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Страница задачи: связанные файлы (AFFECTS из графа + RLM-проработка)
+    и история worklog."""
+    task = await _get_task(session, project, task_id)
+
+    try:
+        graph_files = await graphdb.get_task_files(str(project.id), str(task.id))
+    except Exception:
+        graph_files = []
+    known = {f["path"] for f in graph_files}
+    # файлы из RLM-проработки, которых ещё нет в графе
+    for p in (task.extra or {}).get("files") or []:
+        p = str(p)
+        if p not in known:
+            graph_files.append({"path": p, "role": None, "summary": None})
+            known.add(p)
+
+    res = await session.execute(
+        select(WorkLogEntry)
+        .where(WorkLogEntry.project_id == project.id, WorkLogEntry.task_id == task.id)
+        .order_by(desc(WorkLogEntry.created_at))
+        .limit(50)
+    )
+    worklog = [WorkLogOut.model_validate(w) for w in res.scalars()]
+    return {
+        "task": TaskOut.model_validate(task),
+        "files": graph_files[:60],
+        "worklog": worklog,
+    }
+
+
 @router.delete("/tasks/{task_id}", status_code=204)
 async def delete_task(
     task_id: uuid.UUID,

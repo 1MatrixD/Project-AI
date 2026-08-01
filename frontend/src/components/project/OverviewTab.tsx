@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/api";
+import { API_URL, api, fmtDate, getToken } from "@/lib/api";
 import type { ChangeReport, Decision, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 
@@ -51,6 +51,25 @@ export default function OverviewTab({
     }
   }
 
+  async function downloadExport() {
+    setError("");
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${project.id}/export/markdown`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Экспорт не удался");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.name.replace(/[^\wа-яё -]/gi, "").trim() || "проект"} — карта знаний.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
+  }
+
   const lastJob = jobs.find((j) => j.type === "index");
 
   return (
@@ -83,6 +102,13 @@ export default function OverviewTab({
                 onClick={() => setShowGitImport(true)}
               >
                 ⎇ Импорт из git
+              </button>
+              <button
+                className="btn btn-ghost text-sm"
+                title="Скачать карту знаний одним markdown-файлом"
+                onClick={downloadExport}
+              >
+                ⬇ Экспорт .md
               </button>
             </div>
           </div>
