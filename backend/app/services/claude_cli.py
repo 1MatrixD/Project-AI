@@ -145,7 +145,10 @@ async def run_prompt(
     except json.JSONDecodeError:
         raise ClaudeError(f"Невалидный JSON от claude (код {code}): {out[:500]} / stderr: {err[:500]}")
     if data.get("is_error"):
-        raise ClaudeError(f"claude вернул ошибку: {str(data.get('result'))[:2000]}")
+        detail = data.get("result") or data.get("error") or data.get("subtype") or "без деталей"
+        raise ClaudeError(
+            f"claude вернул ошибку: {str(detail)[:2000]} (subtype={data.get('subtype')}, stderr={err[:300]})"
+        )
     return data
 
 
