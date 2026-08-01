@@ -29,9 +29,13 @@ log = logging.getLogger("projectai.rlm")
 Тот же механизм доступен чат-ассистенту как MCP-инструмент rlm_query.
 """
 
+# git-история — для распознавания эволюции подходов («объявлено, но не используется»)
+GIT_TOOLS = ["Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)", "Bash(git diff:*)"]
+
 SUB_SYSTEM = (
-    "You are a focused code analyst. Answer the question using ONLY the assigned files. "
-    "Read them with the Read tool. Be concise and concrete, answer in Russian."
+    "You are a focused code analyst. Answer the question using ONLY the assigned files "
+    "(Read tool; git log/blame/show allowed for history). Be concise and concrete, "
+    "answer in Russian."
 )
 
 SUB_PROMPT = """Вопрос: {question}
@@ -86,7 +90,7 @@ async def sub_query(project_root: str, question: str, paths: list[str], model: s
         prompt,
         cwd=project_root,
         system=SUB_SYSTEM,
-        tools=["Read"],
+        tools=["Read", "Grep", *GIT_TOOLS],
         model=model or s.ai_model,
         reasoning="low",
         timeout=s.claude_timeout_sec,
@@ -159,7 +163,7 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
             f"Вопрос по проекту: {question}\nОтветь конкретно, по-русски, со ссылками на файлы.",
             cwd=project.root_path,
             system=f"Контекст проекта:\n{graph_context}",
-            tools=["Read", "Grep", "Glob"],
+            tools=["Read", "Grep", "Glob", *GIT_TOOLS],
             model=s.ai_model,
             reasoning="medium",
             timeout=s.claude_timeout_sec,

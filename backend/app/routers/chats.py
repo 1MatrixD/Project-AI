@@ -157,12 +157,18 @@ async def send_message(
             except Exception:
                 graph_context = "(карта знаний недоступна)"
             try:
+                from ..services.decisions import get_decisions_text
+
+                decisions = await get_decisions_text(pid)
+            except Exception:
+                decisions = ""
+            try:
                 mcp_config = await plugin_gen.get_chat_mcp_config(pid)
             except Exception as e:
                 log.warning("MCP-конфиг не собрался: %s", e)
                 mcp_config = None
 
-            system = build_chat_system_prompt(project_name, root_path, graph_context)
+            system = build_chat_system_prompt(project_name, root_path, graph_context, decisions)
             yield _sse({"type": "start"})
 
             async for event in claude_cli.stream_prompt(

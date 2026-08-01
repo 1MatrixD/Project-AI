@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/api";
-import type { ChangeReport, Job, Project } from "@/lib/types";
+import type { ChangeReport, Decision, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 
 const KIND_LABELS: Record<string, string> = {
@@ -54,14 +54,29 @@ export default function OverviewTab({
     <div className="grid gap-4 lg:grid-cols-3">
       <div className="lg:col-span-2 space-y-4">
         <div className="card p-5 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="font-medium">О проекте</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button className="btn btn-ghost text-sm" onClick={() => runIndex("update")}>
                 ⟳ Обновить индекс
               </button>
               <button className="btn btn-ghost text-sm" onClick={() => runIndex("reverify")}>
                 ⟲ Перепроверить всё
+              </button>
+              <button
+                className="btn btn-ghost text-sm"
+                title="Разобрать историю коммитов (включая вложенные репо) в задачи канбана"
+                onClick={async () => {
+                  setError("");
+                  try {
+                    await api(`/projects/${project.id}/git/import`, { method: "POST" });
+                    onAction();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Ошибка");
+                  }
+                }}
+              >
+                ⎇ Импорт из git
               </button>
             </div>
           </div>
@@ -120,6 +135,7 @@ export default function OverviewTab({
       </div>
 
       <div className="space-y-4">
+        <DecisionsCard projectId={project.id} />
         <div className="card p-5 space-y-3">
           <div className="font-medium">Статистика</div>
           {stats ? (
@@ -176,6 +192,106 @@ export default function OverviewTab({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const DECISION_SOURCE: Record<string, string> = {
+  manual: "вручную",
+  meeting: "с созвона",
+  doc: "из документа",
+  chat: "из чата",
+};
+
+/** Соглашения проекта: актуальные решения и смены подходов — защита ИИ от ложных «багов». */
+function DecisionsCard({ projectId }: { projectId: string }) {
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [topic, setTopic] = useState("");
+  const [text, setText] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setDecisions(await api<Decision[]>(`/projects/${projectId}/decisions`));
+    } catch {}
+  }, [projectId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!topic.trim() || !text.trim()) return;
+    await api(`/projects/${projectId}/decisions`, {
+      method: "POST",
+      body: JSON.stringify({ topic: topic.trim(), text: text.trim() }),
+    });
+    setTopic("");
+    setText("");
+    setShowAdd(false);
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!confirm("Удалить соглашение?")) return;
+    await api(`/projects/${projectId}/decisions/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div className="card p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="font-medium">Соглашения проекта</div>
+        <button className="btn btn-ghost text-sm" onClick={() => setShowAdd(!showAdd)}>
+          {showAdd ? "✕" : "+ Добавить"}
+        </button>
+      </div>
+      <div className="text-xs text-[var(--muted)]">
+        Актуальные решения и смены подходов («раньше X, теперь Y»). ИИ сверяется с ними в
+        проработке и проверках — код, противоречащий соглашению, считается легаси, а не багом.
+      </div>
+      {showAdd && (
+        <form onSubmit={add} className="space-y-2">
+          <input
+            className="input"
+            placeholder="Тема (например: Роли в админке)"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+          />
+          <textarea
+            className="input min-h-16 text-sm"
+            placeholder="Актуальное решение…"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button className="btn w-full justify-center text-sm">Сохранить</button>
+        </form>
+      )}
+      {decisions.length === 0 ? (
+        <div className="text-sm text-[var(--muted)]">
+          Пока нет — добавь вручную, попроси ИИ в чате зафиксировать (record_decision) или
+          загрузи созвон: решения извлекаются автоматически.
+        </div>
+      ) : (
+        decisions.map((d) => (
+          <div key={d.id} className="border border-[var(--border)] rounded-lg p-3 space-y-1 group">
+            <div className="flex justify-between gap-2">
+              <div className="text-sm font-medium">{d.topic}</div>
+              <button
+                className="text-[var(--muted)] hover:text-red-300 opacity-0 group-hover:opacity-100 text-xs"
+                onClick={() => remove(d.id)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="text-xs text-[var(--muted)] whitespace-pre-wrap leading-relaxed">{d.text}</div>
+            <div className="text-[10px] text-[var(--muted)]">
+              {DECISION_SOURCE[d.source] ?? d.source} · {fmtDate(d.updated_at)}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

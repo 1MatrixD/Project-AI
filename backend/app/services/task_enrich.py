@@ -12,6 +12,7 @@ from ..jobs_runner import runner
 from ..models import Project, TaskItem
 from ..schemas import normalize_plan
 from . import claude_cli, graphdb, rlm
+from .decisions import get_decisions_text
 from .prompts import (
     TASK_ENRICH_INVESTIGATION_QUESTION,
     TASK_ENRICH_PROMPT,
@@ -58,10 +59,13 @@ async def enrich_one(project: Project, task: TaskItem) -> dict:
     """Прорабатывает одну задачу. Возвращает статистику."""
     s = get_settings()
     pid = str(project.id)
+    decisions = await get_decisions_text(project.id)
 
     # 1. RLM-исследование кодовой базы по задаче
     question = TASK_ENRICH_INVESTIGATION_QUESTION.format(
-        title=task.title, description=(task.description or "")[:2000]
+        title=task.title,
+        description=(task.description or "")[:2000],
+        decisions=decisions,
     )
     try:
         investigation = await rlm.answer(project, question)
@@ -82,6 +86,7 @@ async def enrich_one(project: Project, task: TaskItem) -> dict:
         title=task.title,
         description=(task.description or "(без описания)")[:2000],
         project_context=context,
+        decisions=decisions,
         investigation=investigation_text[:20000],
         existing_tasks=existing,
     )

@@ -161,6 +161,22 @@ async def graph_search(
         raise HTTPException(status_code=502, detail=f"Поиск по графу недоступен: {e}")
 
 
+@router.get("/{project_id}/graph/component")
+async def graph_component(name: str, project: Project = Depends(get_project)) -> dict:
+    info = await graphdb.get_component_info(str(project.id), name)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Компонент «{name}» не найден в карте знаний")
+    return info
+
+
+@router.get("/{project_id}/graph/file")
+async def graph_file(path: str, project: Project = Depends(get_project)) -> dict:
+    info = await graphdb.get_file_info(str(project.id), path)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Файл «{path}» не найден в карте знаний")
+    return info
+
+
 @router.post("/{project_id}/graph/cypher")
 async def graph_cypher(
     body: dict, project: Project = Depends(get_project)
@@ -186,9 +202,48 @@ async def ask(data: AskIn, project: Project = Depends(get_project)) -> AskOut:
     return AskOut(**result)
 
 
+@router.post("/{project_id}/git/import")
+async def git_import_endpoint(project: Project = Depends(get_project)) -> dict:
+    """Импорт истории git (включая вложенные репо) в канбан."""
+    if await runner.has_active(project.id, ["git_import"]):
+        raise HTTPException(status_code=409, detail="Импорт git уже идёт")
+    job = await runner.submit(project.id, "git_import", {})
+    return {"job_id": str(job.id)}
+
+
 @router.get("/{project_id}/plugin")
 async def plugin_info(project: Project = Depends(get_project)) -> dict:
     return plugin_gen.plugin_install_info(project)
+
+
+@router.get("/{project_id}/plugin/files")
+async def plugin_files(project: Project = Depends(get_project)) -> list[dict]:
+    """Файлы сгенерированного плагина (для просмотра скиллов в UI)."""
+    info = plugin_gen.plugin_install_info(project)
+    root = Path(info["path"])
+    if not root.is_dir():
+        return []
+    out = []
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out.append(
+                {"path": str(p.relative_to(root)).replace("\\", "/"), "size": p.stat().st_size}
+            )
+    return out
+
+
+@router.get("/{project_id}/plugin/file")
+async def plugin_file(path: str, project: Project = Depends(get_project)) -> dict:
+    info = plugin_gen.plugin_install_info(project)
+    root = Path(info["path"]).resolve()
+    target = (root / path).resolve()
+    if not str(target).startswith(str(root)) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=415, detail="Файл не читается как текст")
+    return {"path": path, "content": content[:200_000]}
 
 
 @router.post("/{project_id}/plugin/regenerate")

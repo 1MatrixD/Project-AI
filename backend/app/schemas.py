@@ -220,6 +220,27 @@ class WorkLogOut(ORMModel):
     created_at: datetime
 
 
+# --- decisions ---
+
+class DecisionIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1)
+
+
+class DecisionUpdateIn(BaseModel):
+    topic: str | None = None
+    text: str | None = None
+
+
+class DecisionOut(ORMModel):
+    id: uuid.UUID
+    topic: str
+    text: str
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+
 # --- materials ---
 
 class MaterialOut(ORMModel):

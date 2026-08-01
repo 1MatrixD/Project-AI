@@ -39,17 +39,20 @@ async def extract_tasks_from_text(
     project: Project, title: str, source_kind: str, text: str
 ) -> dict:
     """ИИ-выжимка материала: summary + задачи. Возвращает {'summary', 'tasks': [...]}."""
+    from .decisions import get_decisions_text
     from .task_enrich import list_existing_tasks_text
 
     s = get_settings()
     context = await graphdb.get_project_summary_context(str(project.id), 3000)
     existing = await list_existing_tasks_text(project.id)
+    decisions = await get_decisions_text(project.id)
     prompt = TASK_EXTRACTION_PROMPT.format(
         project_name=project.name,
         source_kind=source_kind,
         title=title,
         project_context=context or "(проект ещё не проиндексирован)",
         existing_tasks=existing,
+        decisions=decisions,
         text=text[:MAX_TEXT_FOR_AI],
     )
     obj, _ = await claude_cli.run_json_prompt(
@@ -158,6 +161,21 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                         created_tasks += 1
                         created_ids.append(str(item.id))
                     await session.commit()
+                # решения/договорённости с созвона → соглашения проекта
+                from .decisions import add_decision
+
+                decisions_created = 0
+                for d in (parsed.get("decisions") or [])[:20]:
+                    if isinstance(d, dict) and d.get("topic") and d.get("text"):
+                        await add_decision(
+                            project_id,
+                            str(d["topic"])[:200],
+                            str(d["text"])[:4000],
+                            source="meeting" if dtype == "transcript" else "doc",
+                        )
+                        decisions_created += 1
+                if decisions_created:
+                    stats["decisions_created"] = decisions_created
             except claude_cli.ClaudeError as e:
                 log.warning("Извлечение задач из %s не удалось: %s", material.filename, e)
                 stats["task_extraction_error"] = str(e)[:500]

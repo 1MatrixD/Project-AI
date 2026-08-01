@@ -16,6 +16,7 @@ const SOURCE_LABEL: Record<string, string> = {
   chat: "из чата ИИ",
   meeting: "из созвона",
   doc: "из документа",
+  git: "из git",
 };
 
 const RELATION_LABEL: Record<string, string> = {

@@ -406,7 +406,11 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
     if not tasks:
         return {"checked": 0, "done": 0}
 
+    from .decisions import get_decisions_text
+    from .rlm import GIT_TOOLS
+
     context = await graphdb.get_project_summary_context(str(project_id), 3000)
+    decisions = await get_decisions_text(project_id)
     sem = asyncio.Semaphore(s.ai_concurrency)
     done_cnt = 0
     partial_cnt = 0
@@ -417,6 +421,7 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
         prompt = TASK_VERIFY_PROMPT.format(
             project_name=project.name,
             project_context=context,
+            decisions=decisions,
             title=task.title,
             description=task.description[:3000],
         )
@@ -426,7 +431,7 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
                     prompt,
                     cwd=project.root_path,
                     system=TASK_VERIFY_SYSTEM,
-                    tools=["Read", "Grep", "Glob"],
+                    tools=["Read", "Grep", "Glob", *GIT_TOOLS],
                     model=s.ai_model,
                     reasoning="medium",
                     timeout=s.claude_timeout_sec,

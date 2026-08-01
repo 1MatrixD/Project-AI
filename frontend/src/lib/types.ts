@@ -104,6 +104,14 @@ export type Material = {
   created_at: string;
 };
 
+export type Decision = {
+  id: string;
+  topic: string;
+  text: string;
+  source: string;
+  updated_at: string;
+};
+
 export type GraphData = {
   nodes: { uid: string; labels: string[]; name: string; summary: string; kind: string }[];
   links: { source: string; target: string; type: string }[];

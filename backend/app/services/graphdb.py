@@ -14,7 +14,9 @@ _driver = None
 # Все узлы скоупятся project_id и имеют uid = f"{project_id}|{вид}|{идентификатор}"
 # (составные unique-констрейнты в community-версии ненадёжны, поэтому один uid).
 
-NODE_LABELS = ["Project", "Directory", "File", "Entity", "Component", "Document", "Task", "WorkLog"]
+NODE_LABELS = ["Project", "Directory", "File", "Entity", "Component", "Document", "Task", "WorkLog", "Decision"]
+
+FULLTEXT_INDEX = "knowledge_fulltext_v2"
 
 
 def get_driver():
@@ -43,9 +45,10 @@ async def ensure_constraints() -> None:
                 f"CREATE CONSTRAINT {label.lower()}_uid IF NOT EXISTS "
                 f"FOR (n:{label}) REQUIRE n.uid IS UNIQUE"
             )
+        await s.run("DROP INDEX knowledge_fulltext IF EXISTS")
         await s.run(
-            "CREATE FULLTEXT INDEX knowledge_fulltext IF NOT EXISTS "
-            "FOR (n:File|Entity|Component|Document|Task) "
+            f"CREATE FULLTEXT INDEX {FULLTEXT_INDEX} IF NOT EXISTS "
+            "FOR (n:File|Entity|Component|Document|Task|Decision) "
             "ON EACH [n.name, n.path, n.summary, n.title, n.role]"
         )
 
@@ -370,11 +373,100 @@ async def upsert_worklog_node(project_id: str, entry_id: str, description: str, 
             )
 
 
+async def upsert_decision_node(project_id: str, decision_id: str, topic: str, text: str) -> None:
+    async with get_driver().session() as s:
+        await s.run(
+            """
+            MERGE (p:Project {uid: $pid + '|project|root'})
+            SET p.project_id = $pid
+            MERGE (d:Decision {uid: $pid + '|decision|' + $did})
+            SET d.project_id = $pid, d.title = $topic, d.summary = $text
+            MERGE (p)-[:HAS_DECISION]->(d)
+            """,
+            pid=project_id,
+            did=decision_id,
+            topic=topic[:200],
+            text=text[:4000],
+        )
+
+
+async def delete_decision_node(project_id: str, decision_id: str) -> None:
+    async with get_driver().session() as s:
+        await s.run(
+            "MATCH (d:Decision {uid: $pid + '|decision|' + $did}) DETACH DELETE d",
+            pid=project_id,
+            did=decision_id,
+        )
+
+
+async def get_component_info(project_id: str, name: str) -> dict | None:
+    """Компонент/сервис: описание + ключевые файлы с ролями."""
+    async with get_driver().session(default_access_mode="READ") as s:
+        res = await s.run(
+            """
+            MATCH (c:Component) WHERE c.project_id = $pid
+              AND toLower(c.name) CONTAINS toLower($name)
+            OPTIONAL MATCH (c)-[:INCLUDES]->(f:File)
+            RETURN c.name AS name, c.kind AS kind, c.summary AS summary,
+                   collect({path: f.path, role: f.role, summary: f.summary})[..40] AS files
+            LIMIT 1
+            """,
+            pid=project_id,
+            name=name,
+        )
+        rec = await res.single()
+        if rec is None:
+            return None
+        return {
+            "name": rec["name"],
+            "kind": rec["kind"],
+            "summary": rec["summary"],
+            "files": [f for f in rec["files"] if f.get("path")],
+        }
+
+
+async def get_file_info(project_id: str, path: str) -> dict | None:
+    """Файл: роль, сущности, связи, задачи и работы, которые его касались."""
+    path = path.replace("\\", "/")
+    async with get_driver().session(default_access_mode="READ") as s:
+        res = await s.run(
+            """
+            MATCH (f:File {uid: $pid + '|file|' + $path})
+            OPTIONAL MATCH (f)-[:DEFINES]->(e:Entity)
+            OPTIONAL MATCH (f)-[r:RELATES]->(other:File)
+            OPTIONAL MATCH (t:Task)-[:AFFECTS]->(f)
+            OPTIONAL MATCH (w:WorkLog)-[:UPDATED]->(f)
+            RETURN f.path AS path, f.role AS role, f.summary AS summary,
+                   f.kind AS kind, f.tags AS tags,
+                   collect(DISTINCT {name: e.name, etype: e.etype, summary: e.summary})[..30] AS entities,
+                   collect(DISTINCT {to: other.path, type: r.type})[..30] AS relations,
+                   collect(DISTINCT t.title)[..10] AS tasks,
+                   collect(DISTINCT w.summary)[..10] AS worklogs
+            """,
+            pid=project_id,
+            path=path,
+        )
+        rec = await res.single()
+        if rec is None or rec["path"] is None:
+            return None
+        return {
+            "path": rec["path"],
+            "role": rec["role"],
+            "summary": rec["summary"],
+            "kind": rec["kind"],
+            "tags": rec["tags"],
+            "entities": [e for e in rec["entities"] if e.get("name")],
+            "relations": [r for r in rec["relations"] if r.get("to")],
+            "tasks": rec["tasks"],
+            "worklogs": rec["worklogs"],
+        }
+
+
 async def fulltext_search(project_id: str, query: str, limit: int = 20) -> list[dict]:
     async with get_driver().session() as s:
         res = await s.run(
-            """
-            CALL db.index.fulltext.queryNodes('knowledge_fulltext', $q)
+            f"""
+            CALL db.index.fulltext.queryNodes('{FULLTEXT_INDEX}', $q)
             YIELD node, score
             WHERE node.project_id = $pid
             RETURN labels(node) AS labels, properties(node) AS props, score

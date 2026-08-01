@@ -88,6 +88,19 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     overview = project.meta.get("overview") or {}
     detect = project.meta.get("detect") or {}
 
+    from sqlalchemy import select
+
+    from ..models import Decision
+
+    async with get_sessionmaker()() as session:
+        res = await session.execute(
+            select(Decision)
+            .where(Decision.project_id == project.id)
+            .order_by(Decision.updated_at.desc())
+            .limit(60)
+        )
+        decisions = list(res.scalars())
+
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
         json.dumps(
             {
@@ -128,6 +141,14 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
         ]
     if overview.get("conventions"):
         arch_body_parts += ["## Конвенции", overview["conventions"], ""]
+    if decisions:
+        arch_body_parts.append("## Соглашения и актуальные решения")
+        arch_body_parts.append(
+            "Код, противоречащий этим решениям, — легаси, а не эталон. Актуальный список — `list_decisions`."
+        )
+        for d in decisions[:40]:
+            arch_body_parts.append(f"- **{d.topic}**: {d.text[:600]}")
+        arch_body_parts.append("")
     how_to = overview.get("how_to") or {}
     if how_to:
         arch_body_parts.append("## Как работать с проектом")
@@ -150,6 +171,33 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
         ),
         encoding="utf-8",
     )
+
+    # скилл «сервисы»: какие компоненты есть и за что отвечают, с файлами
+    comps = overview.get("components") or []
+    if comps:
+        body = [
+            f"# Сервисы и компоненты «{project.name}»",
+            "",
+            "За деталями по компоненту — MCP `component_info(name)`; по файлу — `file_info(path)`.",
+            "",
+        ]
+        for c in comps[:40]:
+            body += [
+                f"## {c.get('name')} ({c.get('kind', 'module')})",
+                c.get("summary", ""),
+                "Ключевые файлы: " + ", ".join(c.get("paths", [])[:12]),
+                "",
+            ]
+        d = skills_dir / "services"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            _skill(
+                "services",
+                f"Сервисы и компоненты проекта «{project.name}»: за что каждый отвечает, ключевые файлы. Используй при вопросах «где реализовано X».",
+                "\n".join(body),
+            ),
+            encoding="utf-8",
+        )
 
     features = overview.get("business_logic") or []
     if features:
@@ -250,6 +298,11 @@ MCP_TOOLS_INFO = [
     {"name": "list_files", "description": "Реестр файлов проекта с ролями из ИИ-анализа"},
     {"name": "list_documents", "description": "Материалы: транскрипты созвонов, ТЗ, документы"},
     {"name": "read_document", "description": "Чтение текста материала (транскрипта/документа)"},
+    {"name": "component_info", "description": "Детали компонента/сервиса: за что отвечает, ключевые файлы с ролями"},
+    {"name": "file_info", "description": "Досье файла: роль, сущности, связи, задачи и работы по нему"},
+    {"name": "list_decisions", "description": "Соглашения проекта: актуальные решения и смены подходов"},
+    {"name": "record_decision", "description": "Зафиксировать решение/смену подхода (обновляет совпадающую тему)"},
+    {"name": "git_import", "description": "Импорт истории git (вложенные репо) в канбан выполненными работами"},
     {"name": "rlm_query", "description": "Рекурсивный анализ кодовой базы (RLM): под-агенты читают файлы и возвращают ответ"},
     {"name": "task_list", "description": "Канбан-доска задач проекта"},
     {"name": "task_create", "description": "Создать задачу в канбане"},

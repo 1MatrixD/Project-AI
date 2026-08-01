@@ -168,6 +168,24 @@ class WorkLogEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Decision(Base):
+    """Соглашение/решение проекта: актуальные подходы и что от чего отказались.
+
+    Ключ к корректной работе ИИ с эволюционирующим проектом: «раньше была роль
+    ORGANIZER, теперь MANAGER + доп. пермишены» — это решение, а не баг.
+    """
+
+    __tablename__ = "decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    topic: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(24), default="manual")  # manual | meeting | doc | chat
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Material(Base):
     """Загруженный материал: документ, аудио, видео, ТЗ и т.п."""
 

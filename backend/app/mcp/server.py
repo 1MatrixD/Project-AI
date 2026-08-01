@@ -94,6 +94,44 @@ async def graph_cypher(query: str) -> str:
 
 
 @mcp.tool()
+async def component_info(name: str) -> str:
+    """Детали компонента/сервиса из карты знаний: описание, за что отвечает,
+    ключевые файлы с ролями. name — часть имени (например «admin-backend»)."""
+    return _fmt(await _get(f"{P}/graph/component", name=name))
+
+
+@mcp.tool()
+async def file_info(path: str) -> str:
+    """Досье файла из карты знаний: роль, сущности, связи с другими файлами,
+    задачи и работы, которые его касались. path — относительно корня проекта."""
+    return _fmt(await _get(f"{P}/graph/file", path=path))
+
+
+@mcp.tool()
+async def list_decisions() -> str:
+    """Соглашения проекта: актуальные решения и смены подходов («раньше X, теперь Y»).
+    Код, противоречащий соглашению, — легаси, а не эталон. Сверяйся перед тем,
+    как назвать что-то багом."""
+    return _fmt(await _get(f"{P}/decisions"))
+
+
+@mcp.tool()
+async def record_decision(topic: str, text: str) -> str:
+    """Зафиксировать соглашение/решение проекта. ОБЯЗАТЕЛЬНО вызывай, когда
+    пользователь поправляет понимание проекта («это не баг, мы сменили подход»)
+    или на созвоне зафиксирована смена подхода. Совпадающая тема обновляется."""
+    return _fmt(await _post(f"{P}/decisions", {"topic": topic, "text": text}))
+
+
+@mcp.tool()
+async def git_import() -> str:
+    """Импортировать историю git (включая вложенные репо монорепо) в канбан:
+    коммиты группируются в выполненные работы, совпадающие открытые задачи
+    закрываются с отчётом. Выполняется в фоне."""
+    return _fmt(await _post(f"{P}/git/import"))
+
+
+@mcp.tool()
 async def list_files(query: str = "", kind: str = "", limit: int = 50) -> str:
     """Реестр файлов проекта с ролями и сводками. kind: code|config|doc|test|asset|data|other."""
     return _fmt(await _get(f"{P}/files", q=query or None, kind=kind or None, limit=limit))

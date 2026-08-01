@@ -68,9 +68,36 @@ def answer_for(prompt: str) -> str:
                     {"title": "Сделать фичу А", "description": "Описание фичи А из созвона", "plan": ["шаг 1", "шаг 2"]},
                     {"title": "Починить баг Б", "description": "Описание бага Б", "plan": []},
                 ],
+                "decisions": [
+                    {"topic": "Роли в тесте", "text": "Решили: роль X упразднена, используем Y с доп. пермишенами."}
+                ],
             },
             ensure_ascii=False,
         )
+    if "Сгруппируй коммиты" in prompt:
+        hashes = re.findall(r"^- ([0-9a-f]{6,12}) \[", prompt, flags=re.MULTILINE)
+        groups = []
+        if hashes:
+            groups.append(
+                {
+                    "title": "Работа из git-истории",
+                    "description": "Сводная работа по коммитам теста.",
+                    "commits": hashes[:5],
+                    "files": ["main.py"],
+                    "matches_existing_task": None,
+                }
+            )
+        if "Сделать фичу А" in prompt and hashes:
+            groups.append(
+                {
+                    "title": "Закрытие фичи А по коммитам",
+                    "description": "Коммиты подтверждают фичу А.",
+                    "commits": hashes[:1],
+                    "files": ["main.py"],
+                    "matches_existing_task": "Сделать фичу А",
+                }
+            )
+        return json.dumps({"groups": groups}, ensure_ascii=False)
     if "реализована ли эта задача" in prompt or "Проверь по кодовой базе" in prompt:
         implemented = "yes" if "Сделать фичу А" in prompt else "no"
         return json.dumps(
