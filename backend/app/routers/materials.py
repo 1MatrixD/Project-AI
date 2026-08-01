@@ -18,6 +18,24 @@ router = APIRouter(prefix="/projects/{project_id}/materials", tags=["materials"]
 
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 ГБ (видео созвонов)
 
+_INVALID_FS_CHARS = '<>:"/\\|?*'
+
+
+def sanitize_filename(raw: str | None) -> str:
+    name = (raw or "file").replace("\\", "/").split("/")[-1]
+    if name.startswith("=?") and name.endswith("?="):
+        # RFC 2047 (так кодируют не-ASCII имена некоторые клиенты)
+        try:
+            from email.header import decode_header
+
+            decoded, charset = decode_header(name)[0]
+            if isinstance(decoded, bytes):
+                name = decoded.decode(charset or "utf-8", errors="replace")
+        except Exception:
+            pass
+    name = "".join("_" if c in _INVALID_FS_CHARS or ord(c) < 32 else c for c in name)
+    return (name.strip() or "file")[:400]
+
 
 @router.get("", response_model=list[MaterialOut])
 async def list_materials(
@@ -40,7 +58,7 @@ async def upload_material(
     extract_tasks: bool = True,
 ) -> MaterialOut:
     s = get_settings()
-    filename = (file.filename or "file").replace("\\", "/").split("/")[-1][:400]
+    filename = sanitize_filename(file.filename)
     material = Material(
         project_id=project.id,
         filename=filename,
