@@ -466,6 +466,52 @@ function TaskModal({
           </div>
         )}
 
+        {(task.extra?.open_questions?.length ?? 0) > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-sm font-medium">
+              Решить до начала{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — ИИ намеренно не выбирал за тебя
+              </span>
+            </div>
+            {task.extra!.open_questions!.map((q, i) => (
+              <div
+                key={i}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 space-y-1"
+              >
+                <div className="text-sm">{q.question}</div>
+                <ul className="text-xs text-[var(--muted)] space-y-0.5">
+                  {q.options.map((o, j) => (
+                    <li key={j}>— {o}</li>
+                  ))}
+                </ul>
+                {q.lean && (
+                  <div className="text-xs text-[var(--accent-2)]">склоняется к: {q.lean}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(task.extra?.impact?.length ?? 0) > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Что заденет{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — проверить после правки
+              </span>
+            </div>
+            <ul className="text-xs space-y-1">
+              {task.extra!.impact!.map((i, idx) => (
+                <li key={idx}>
+                  <span className="font-mono">{i.what}</span>
+                  <span className="text-[var(--muted)]"> — {i.why}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {(detail ? detail.files.length > 0 : (task.extra?.files?.length ?? 0) > 0) && (
           <div className="space-y-1">
             <div className="text-sm font-medium">

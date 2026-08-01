@@ -89,37 +89,71 @@ async def enrich_one(
         investigated_paths = sorted(
             {p for sq in investigation.get("sub_queries", []) for p in sq.get("paths", [])}
         )
+        investigation_ok = True
         await report(0.62, f"исследование готово, файлов: {len(investigated_paths)}")
     except Exception as e:
         log.warning("RLM-исследование задачи %s упало: %s", task.id, e)
         investigation_text = "(исследование не удалось — опирайся на карту знаний)"
         investigated_paths = []
+        investigation_ok = False
         await report(0.62, "исследование не удалось — опираюсь на карту знаний")
 
     # 2. Синтез детальной задачи
     await report(0.68, "собираю описание и пошаговый план")
     context = await graphdb.get_project_summary_context(pid, 3000)
     existing = await list_existing_tasks_text(project.id, exclude=task.id)
-    prompt = TASK_ENRICH_PROMPT.format(
-        project_name=project.name,
-        title=task.title,
-        description=(task.description or "(без описания)")[:2000],
-        project_context=context,
-        decisions=decisions,
-        investigation=investigation_text[:20000],
-        existing_tasks=existing,
-    )
-    obj, _ = await claude_cli.run_json_prompt(
-        prompt,
-        system=TASK_ENRICH_SYSTEM,
-        tools=[],
-        model=s.ai_model,
-        reasoning="medium",
-        max_turns=s.claude_max_turns,
-        timeout=s.claude_timeout_sec,
-    )
-    if not isinstance(obj, dict):
-        raise claude_cli.ClaudeError("Ожидался JSON-объект проработки")
+
+    async def synthesize(facts: str) -> dict:
+        prompt = TASK_ENRICH_PROMPT.format(
+            project_name=project.name,
+            title=task.title,
+            description=(task.description or "(без описания)")[:2000],
+            project_context=context,
+            decisions=decisions,
+            investigation=facts[:20000],
+            existing_tasks=existing,
+        )
+        result, _ = await claude_cli.run_json_prompt(
+            prompt,
+            system=TASK_ENRICH_SYSTEM,
+            tools=[],
+            model=s.ai_model,
+            reasoning="medium",
+            max_turns=s.claude_max_turns,
+            timeout=s.claude_timeout_sec,
+        )
+        if not isinstance(result, dict):
+            raise claude_cli.ClaudeError("Ожидался JSON-объект проработки")
+        return result
+
+    obj = await synthesize(investigation_text)
+
+    # 3. Доисследование: синтез сам перечисляет, чего не нашёл в коде. Это второй
+    # уровень RLM — узкий и только по этим вопросам, один раз. Без него модель
+    # выдаёт догадку («наверное, где-то есть») вместо факта.
+    unresolved = [
+        str(u).strip()[:300] for u in (obj.get("unresolved") or [])[:5] if str(u).strip()
+    ]
+    if unresolved and investigation_ok:
+        await report(0.72, f"доисследование: вопросов без ответа — {len(unresolved)}")
+
+        async def followup_stage(value: float, detail: str) -> None:
+            await report(0.72 + 0.14 * value, f"доисследование — {detail}")
+
+        followup_question = "Ответь строго на эти вопросы по коду проекта:\n" + "\n".join(
+            f"- {u}" for u in unresolved
+        )
+        try:
+            extra_inv = await rlm.answer(project, followup_question, on_stage=followup_stage)
+            investigation_text += "\n\nДоисследование:\n" + str(extra_inv.get("answer", ""))
+            investigated_paths = sorted(
+                set(investigated_paths)
+                | {p for sq in extra_inv.get("sub_queries", []) for p in sq.get("paths", [])}
+            )
+            await report(0.88, "пересобираю описание с учётом доисследования")
+            obj = await synthesize(investigation_text)
+        except Exception as e:
+            log.warning("Доисследование задачи %s упало: %s", task.id, e)
 
     description = str(obj.get("description", "")).strip()
     plan = normalize_plan(obj.get("plan"))
@@ -134,6 +168,20 @@ async def enrich_one(
         if isinstance(r, dict) and r.get("title")
     ]
     duplicate_of = obj.get("duplicate_of") or None
+    open_questions = [
+        {
+            "question": str(q.get("question", ""))[:400],
+            "options": [str(o)[:300] for o in (q.get("options") or [])[:4]],
+            "lean": str(q.get("lean", ""))[:300],
+        }
+        for q in (obj.get("open_questions") or [])[:6]
+        if isinstance(q, dict) and str(q.get("question", "")).strip()
+    ]
+    impact = [
+        {"what": str(i.get("what", ""))[:300], "why": str(i.get("why", ""))[:400]}
+        for i in (obj.get("impact") or [])[:10]
+        if isinstance(i, dict) and str(i.get("what", "")).strip()
+    ]
 
     async with get_sessionmaker()() as session:
         db_task = await session.get(TaskItem, task.id)
@@ -150,6 +198,8 @@ async def enrich_one(
             "files": files or investigated_paths[:40],
             "related": related,
             "duplicate_of": str(duplicate_of)[:300] if duplicate_of else None,
+            "open_questions": open_questions,
+            "impact": impact,
         }
         await session.commit()
 
@@ -157,7 +207,13 @@ async def enrich_one(
     await graphdb.upsert_task_node(
         pid, str(task.id), task.title, task.status, (files or investigated_paths)[:30]
     )
-    return {"updated": 1, "files": len(files), "related": len(related)}
+    return {
+        "updated": 1,
+        "files": len(files),
+        "related": len(related),
+        "open_questions": len(open_questions),
+        "impact": len(impact),
+    }
 
 
 async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:

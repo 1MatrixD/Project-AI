@@ -82,6 +82,9 @@ export type TaskExtra = {
   files?: string[];
   related?: { title: string; relation: string; note: string }[];
   duplicate_of?: string | null;
+  // развилки, которые ИИ намеренно не решил за человека, и что заденет правка
+  open_questions?: { question: string; options: string[]; lean: string }[];
+  impact?: { what: string; why: string }[];
   // планировщик: у родителя — planned/plan_summary/subtasks, у подзадач — parent/depends_on
   planned?: boolean;
   plan_summary?: string;
