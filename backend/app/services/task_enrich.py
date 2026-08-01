@@ -55,30 +55,49 @@ async def list_existing_tasks_text(project_id: uuid.UUID, exclude: uuid.UUID | N
     return "\n".join(lines) or "(задач ещё нет)"
 
 
-async def enrich_one(project: Project, task: TaskItem) -> dict:
-    """Прорабатывает одну задачу. Возвращает статистику."""
+async def enrich_one(
+    project: Project, task: TaskItem, on_progress: rlm.StageCb | None = None
+) -> dict:
+    """Прорабатывает одну задачу. Возвращает статистику.
+
+    `on_progress` получает долю выполненного (0..1) и описание текущего шага:
+    проработка идёт минутами, и без отметок она выглядит зависшей.
+    """
     s = get_settings()
     pid = str(project.id)
+
+    async def report(value: float, detail: str) -> None:
+        if on_progress is not None:
+            await on_progress(value, detail)
+
     decisions = await get_decisions_text(project.id)
 
-    # 1. RLM-исследование кодовой базы по задаче
+    # 1. RLM-исследование кодовой базы по задаче (самая долгая фаза — до 60%)
     question = TASK_ENRICH_INVESTIGATION_QUESTION.format(
         title=task.title,
         description=(task.description or "")[:2000],
         decisions=decisions,
     )
+
+    async def rlm_stage(value: float, detail: str) -> None:
+        await report(0.05 + 0.55 * value, f"исследование — {detail}")
+
+    await report(0.03, "исследование — выбираю файлы по карте знаний")
     try:
-        investigation = await rlm.answer(project, question)
+        investigation = await rlm.answer(project, question, on_stage=rlm_stage)
         investigation_text = investigation["answer"]
         investigated_paths = sorted(
             {p for sq in investigation.get("sub_queries", []) for p in sq.get("paths", [])}
         )
+        await report(0.62, f"исследование готово, файлов: {len(investigated_paths)}")
     except Exception as e:
         log.warning("RLM-исследование задачи %s упало: %s", task.id, e)
         investigation_text = "(исследование не удалось — опирайся на карту знаний)"
         investigated_paths = []
+        await report(0.62, "исследование не удалось — опираюсь на карту знаний")
 
     # 2. Синтез детальной задачи
+    await report(0.68, "собираю описание и пошаговый план")
     context = await graphdb.get_project_summary_context(pid, 3000)
     existing = await list_existing_tasks_text(project.id, exclude=task.id)
     prompt = TASK_ENRICH_PROMPT.format(
@@ -134,6 +153,7 @@ async def enrich_one(project: Project, task: TaskItem) -> dict:
         }
         await session.commit()
 
+    await report(0.95, "сохраняю описание, план и связи с файлами")
     await graphdb.upsert_task_node(
         pid, str(task.id), task.title, task.status, (files or investigated_paths)[:30]
     )
@@ -163,23 +183,43 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
     sem = asyncio.Semaphore(s.ai_concurrency)
     done = 0
     errors = 0
+    total = len(tasks)
+
+    # Задачи прорабатываются параллельно, поэтому общий прогресс — среднее
+    # по задачам, а не счётчик завершённых: иначе полоса стоит на нуле
+    # всё время работы и выглядит как зависание.
+    progress_by_task: dict[uuid.UUID, float] = {t.id: 0.0 for t in tasks}
+    progress_lock = asyncio.Lock()
+
+    def label(t: TaskItem) -> str:
+        title = " ".join(t.title.split())
+        return title[:50] + ("…" if len(title) > 50 else "")
+
+    async def report_for(t: TaskItem, value: float, detail: str) -> None:
+        async with progress_lock:
+            progress_by_task[t.id] = max(progress_by_task[t.id], min(1.0, value))
+            overall = sum(progress_by_task.values()) / total
+        text = detail if total == 1 else f"«{label(t)}» — {detail}"
+        await runner.report(job_id, min(0.98, overall), text)
+
+    await runner.report(job_id, 0.01, f"RLM-проработка, задач: {total}")
 
     async def run_one(t: TaskItem) -> None:
         nonlocal done, errors
         if runner.is_cancelled(job_id):
             return
+        failure = ""
         async with sem:
             try:
-                await enrich_one(project, t)
+                await enrich_one(project, t, on_progress=lambda v, d, _t=t: report_for(_t, v, d))
                 done += 1
             except Exception as e:
                 log.warning("Проработка задачи «%s» упала: %s", t.title, e)
                 errors += 1
-        await runner.report(
-            job_id,
-            min(0.98, (done + errors) / len(tasks)),
-            f"RLM-проработка задач: {done + errors}/{len(tasks)}",
-        )
+                failure = str(e)[:120]
+        finished = done + errors
+        tail = "" if total == 1 else f" ({finished}/{total})"
+        await report_for(t, 1.0, (f"ошибка: {failure}" if failure else "проработана") + tail)
 
     await asyncio.gather(*(run_one(t) for t in tasks))
     runner.check_cancelled(job_id)

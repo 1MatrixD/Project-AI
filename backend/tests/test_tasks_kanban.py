@@ -84,7 +84,9 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     assert any(row["title"] == "Первая задача" and row["status"] == "done" for row in rows)
 
 
-async def test_enrich_task_rlm(user_client: httpx.AsyncClient, project: dict) -> None:
+async def test_enrich_task_rlm(
+    user_client: httpx.AsyncClient, project: dict, monkeypatch
+) -> None:
     pid = project["id"]
     r = await user_client.post(
         f"/api/projects/{pid}/tasks",
@@ -93,11 +95,31 @@ async def test_enrich_task_rlm(user_client: httpx.AsyncClient, project: dict) ->
     task = r.json()
     assert task["extra"] == {}
 
+    # проработка идёт минутами, поэтому следим, что прогресс сообщается по ходу дела,
+    # а не единственным разом в самом конце
+    from app.jobs_runner import runner
+
+    seen: list[tuple[float, str]] = []
+    original_report = runner.report
+
+    async def spy_report(job_id, progress, detail="", stats=None):
+        seen.append((progress, detail))
+        await original_report(job_id, progress, detail, stats)
+
+    monkeypatch.setattr(runner, "report", spy_report)
+
     r = await user_client.post(f"/api/projects/{pid}/tasks/{task['id']}/enrich")
     assert r.status_code == 200
     job = await wait_job(user_client, pid, r.json()["job_id"])
     assert job["status"] == "done", job
     assert job["stats"]["enriched"] == 1
+
+    values = [p for p, _ in seen]
+    assert len(values) >= 3, seen
+    assert values == sorted(values), seen
+    # есть промежуточные отметки, а не только «начали» и «всё»
+    assert any(0.01 < p < 0.9 for p in values), seen
+    assert any("исследование" in d for _, d in seen), seen
 
     r = await user_client.get(f"/api/projects/{pid}/tasks")
     enriched = next(t for t in r.json() if t["id"] == task["id"])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy import select
 
@@ -12,6 +13,10 @@ from ..models import Project, ProjectFile
 from . import claude_cli, graphdb, roots
 
 log = logging.getLogger("projectai.rlm")
+
+#: Колбэк прогресса: (доля выполненного пайплайна 0..1, что происходит сейчас).
+#: Нужен вызывающим, которые показывают ход работы пользователю (проработка задач).
+StageCb = Callable[[float, str], Awaitable[None]]
 
 """Recursive Language Models (MIT, Zhang et al.) в применении к проекту.
 
@@ -112,13 +117,27 @@ async def _file_index(project_id: uuid.UUID, max_lines: int = 400) -> str:
     return "\n".join(f"- {r.rel_path}: {(r.summary or r.kind)[:120]}" for r in rows)[:20000]
 
 
-async def answer(project: Project, question: str, paths: list[str] | None = None) -> dict:
-    """Полный RLM-пайплайн: план → параллельные под-вызовы → синтез."""
+async def answer(
+    project: Project,
+    question: str,
+    paths: list[str] | None = None,
+    on_stage: StageCb | None = None,
+) -> dict:
+    """Полный RLM-пайплайн: план → параллельные под-вызовы → синтез.
+
+    `on_stage` вызывается на границах фаз. Пайплайн работает минутами, и без
+    таких отметок вызывающий не может показать, что происходит.
+    """
     s = get_settings()
     pid = str(project.id)
 
+    async def stage(value: float, detail: str) -> None:
+        if on_stage is not None:
+            await on_stage(value, detail)
+
     if paths:
         # пользователь сам ограничил область — один под-вызов
+        await stage(0.2, f"читаю файлы: {len(paths)}")
         result = await sub_query(project, question, paths)
         return {"answer": result, "sub_queries": [{"focus": question, "paths": paths}]}
 
@@ -162,6 +181,7 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
 
     if not groups:
         # запасной путь: один агент с обычными инструментами
+        await stage(0.25, "план не построен — отвечает один агент")
         data = await claude_cli.run_prompt(
             f"Вопрос по проекту: {question}\nОтветь конкретно, по-русски, со ссылками на файлы.",
             cwd=project.root_path,
@@ -173,9 +193,14 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
         )
         return {"answer": str(data.get("result", "")), "sub_queries": []}
 
+    await stage(0.15, f"план готов, групп файлов: {len(groups)}")
+
     sem = asyncio.Semaphore(s.ai_concurrency)
+    finished = 0
+    counter_lock = asyncio.Lock()
 
     async def run_group(g: dict) -> dict:
+        nonlocal finished
         focus = str(g.get("focus", question))
         paths_g = [str(p) for p in g["paths"][:12]]
         async with sem:
@@ -183,9 +208,16 @@ async def answer(project: Project, question: str, paths: list[str] | None = None
                 ans = await sub_query(project, f"{question}\nФокус: {focus}", paths_g)
             except claude_cli.ClaudeError as e:
                 ans = f"(под-агент упал: {e})"
+        async with counter_lock:
+            finished += 1
+            value = 0.15 + 0.70 * finished / len(groups)
+            seen = finished
+        await stage(value, f"под-агенты: {seen}/{len(groups)} — {focus[:60]}")
         return {"focus": focus, "paths": paths_g, "answer": ans}
 
     subs = await asyncio.gather(*(run_group(g) for g in groups))
+
+    await stage(0.9, "свожу ответы под-агентов")
 
     sub_answers = "\n\n".join(
         f"### Группа: {s_['focus']}\nФайлы: {', '.join(s_['paths'])}\n{s_['answer']}" for s_ in subs
