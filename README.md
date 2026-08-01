@@ -30,6 +30,15 @@ Self-hosted система «второй мозг проекта»: детал�
 Требуется: Docker Desktop, Python 3.13 (`py`), Node.js 20+, установленный и авторизованный
 [Claude Code CLI](https://code.claude.com/docs/en/cli-reference).
 
+Одной командой (поднимет docker-инфраструктуру, при первом запуске поставит зависимости,
+откроет бэкенд и фронтенд в отдельных окнах и запустит браузер):
+
+```powershell
+.\start.ps1
+```
+
+Либо вручную:
+
 ```bash
 # 1. Инфраструктура (Postgres 5432, Neo4j 7474/7687)
 docker compose up -d
