@@ -51,6 +51,57 @@ SUB_PROMPT = """Вопрос: {question}
 Дай сжатый ответ по этим файлам: только факты, относящиеся к вопросу, со ссылками на файлы.
 Если в этих файлах ответа нет — так и скажи одной строкой."""
 
+#: маркер, по которому ветка просит углубиться (см. `_parse_followups`)
+FOLLOWUP_MARKER = "НУЖНО УТОЧНИТЬ"
+
+SUB_FOLLOWUP_TAIL = """
+
+Если для полного ответа не хватает того, чего в назначенных файлах нет, закончи ответ блоком:
+{marker}:
+- вопрос
+Не больше {limit} вопрос(ов), каждый — про конкретный механизм, файл или контракт,
+а не общий («как всё устроено»). По каждому будет запущено отдельное исследование,
+поэтому спрашивай только то, что реально меняет ответ. Хватило информации — блок не пиши."""
+
+#: потолок глубины, когда ограничение снято (rlm_max_depth = 0): рекурсия должна сходиться
+HARD_DEPTH_CAP = 5
+
+
+class _NodeBudget:
+    """Общий на весь прогон счётчик вложенных исследований."""
+
+    def __init__(self, limit: int) -> None:
+        self.left = max(0, limit)
+
+    def take(self) -> bool:
+        if self.left <= 0:
+            return False
+        self.left -= 1
+        return True
+
+
+def _depth_allowed(depth: int, max_depth: int) -> bool:
+    """Можно ли с уровня `depth` породить ещё один уровень."""
+    if max_depth <= 0:
+        return depth + 1 < HARD_DEPTH_CAP
+    return depth + 1 < max_depth
+
+
+def _parse_followups(text: str, limit: int) -> list[str]:
+    """Вопросы из блока «НУЖНО УТОЧНИТЬ» в конце ответа под-агента."""
+    idx = text.find(FOLLOWUP_MARKER)
+    if idx < 0 or limit <= 0:
+        return []
+    out: list[str] = []
+    for line in text[idx + len(FOLLOWUP_MARKER):].splitlines()[1:]:
+        line = line.strip().lstrip("-*•").strip()
+        if len(line) < 8:
+            continue
+        out.append(line[:300])
+        if len(out) >= limit:
+            break
+    return out
+
 ROOT_PLAN_SYSTEM = (
     "You are a research planner over a codebase knowledge map. Answer ONLY with valid JSON."
 )
@@ -86,14 +137,25 @@ ROOT_SYNTH_PROMPT = """Вопрос пользователя по проекту
 Если данных не хватает — скажи, чего именно."""
 
 
-async def sub_query(project: Project, question: str, paths: list[str], model: str | None = None) -> str:
+async def sub_query(
+    project: Project,
+    question: str,
+    paths: list[str],
+    model: str | None = None,
+    followup_limit: int = 0,
+) -> str:
     """Под-вызов RLM: изолированный агент читает только назначенные файлы.
 
     cwd — основной каталог; файлы дополнительных корней мультирепо
-    подставляются абсолютными путями, иначе Read их не найдёт."""
+    подставляются абсолютными путями, иначе Read их не найдёт.
+
+    `followup_limit` > 0 разрешает ветке попросить углубление: агент допишет блок
+    «НУЖНО УТОЧНИТЬ», и по каждому вопросу запустится своё исследование."""
     s = get_settings()
     files = "\n".join(f"- {roots.fs_path_for_prompt(project, p)}" for p in paths[:30])
     prompt = SUB_PROMPT.format(question=question, files=files)
+    if followup_limit > 0:
+        prompt += SUB_FOLLOWUP_TAIL.format(marker=FOLLOWUP_MARKER, limit=followup_limit)
     data = await claude_cli.run_prompt(
         prompt,
         cwd=project.root_path,
@@ -122,14 +184,23 @@ async def answer(
     question: str,
     paths: list[str] | None = None,
     on_stage: StageCb | None = None,
+    _depth: int = 0,
+    _budget: "_NodeBudget | None" = None,
+    _sem: asyncio.Semaphore | None = None,
 ) -> dict:
     """Полный RLM-пайплайн: план → параллельные под-вызовы → синтез.
 
     `on_stage` вызывается на границах фаз. Пайплайн работает минутами, и без
     таких отметок вызывающий не может показать, что происходит.
+
+    При `rlm_max_depth` больше единицы ветка может сама попросить углубление —
+    тогда по её вопросам рекурсивно запускается тот же пайплайн. Подчёркнутые
+    параметры служебные, снаружи их не передают: глубина, общий бюджет вложенных
+    исследований и общий семафор (чтобы суммарная параллельность не росла с глубиной).
     """
     s = get_settings()
     pid = str(project.id)
+    budget = _budget or _NodeBudget(s.rlm_max_nodes)
 
     async def stage(value: float, detail: str) -> None:
         if on_stage is not None:
@@ -195,9 +266,10 @@ async def answer(
 
     await stage(0.15, f"план готов, групп файлов: {len(groups)}")
 
-    sem = asyncio.Semaphore(s.ai_concurrency)
+    sem = _sem or asyncio.Semaphore(s.ai_concurrency)
     finished = 0
     counter_lock = asyncio.Lock()
+    can_recurse = _depth_allowed(_depth, s.rlm_max_depth)
 
     async def run_group(g: dict) -> dict:
         nonlocal finished
@@ -205,9 +277,43 @@ async def answer(
         paths_g = [str(p) for p in g["paths"][:12]]
         async with sem:
             try:
-                ans = await sub_query(project, f"{question}\nФокус: {focus}", paths_g)
+                ans = await sub_query(
+                    project,
+                    f"{question}\nФокус: {focus}",
+                    paths_g,
+                    followup_limit=s.rlm_branching if can_recurse else 0,
+                )
             except claude_cli.ClaudeError as e:
                 ans = f"(под-агент упал: {e})"
+
+        # Ветка попросила углубиться — рекурсия тем же пайплайном.
+        # Семафор и бюджет общие, поэтому глубина не размножает процессы.
+        if can_recurse:
+            asked = [q for q in _parse_followups(ans, s.rlm_branching) if budget.take()]
+            if asked:
+                await stage(
+                    0.15 + 0.70 * (finished / len(groups)),
+                    f"углубляюсь на уровень {_depth + 2}: вопросов — {len(asked)}",
+                )
+                deeper = await asyncio.gather(
+                    *(
+                        answer(project, q, _depth=_depth + 1, _budget=budget, _sem=sem)
+                        for q in asked
+                    ),
+                    return_exceptions=True,
+                )
+                parts = []
+                for asked_q, res in zip(asked, deeper):
+                    if isinstance(res, BaseException) or not isinstance(res, dict):
+                        log.warning("Углубление «%s» не удалось: %s", asked_q[:60], res)
+                        continue
+                    parts.append(f"[уточнение] {asked_q}\n{res.get('answer', '')}")
+                    paths_g += [
+                        p for sq in res.get("sub_queries", []) for p in sq.get("paths", [])
+                    ]
+                if parts:
+                    ans += "\n\nУглубление:\n" + "\n\n".join(parts)
+
         async with counter_lock:
             finished += 1
             value = 0.15 + 0.70 * finished / len(groups)

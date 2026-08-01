@@ -84,6 +84,57 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     assert any(row["title"] == "Первая задача" and row["status"] == "done" for row in rows)
 
 
+def test_rlm_depth_limits() -> None:
+    """Глубина: 1 — без углубления, 2 — один вложенный уровень, 0 — до жёсткого потолка."""
+    from app.services.rlm import HARD_DEPTH_CAP, _depth_allowed, _parse_followups
+
+    assert _depth_allowed(0, 1) is False
+    assert _depth_allowed(0, 2) is True
+    assert _depth_allowed(1, 2) is False
+    assert _depth_allowed(0, 0) is True
+    assert _depth_allowed(HARD_DEPTH_CAP - 1, 0) is False
+
+    # «- да» отсекается как мусор: слишком коротко для осмысленного вопроса
+    text = "Ответ по файлам.\n\nНУЖНО УТОЧНИТЬ:\n- где формируется ответ\n- да\n- второй вопрос"
+    assert _parse_followups(text, 2) == ["где формируется ответ", "второй вопрос"]
+    assert _parse_followups("Ответ без блока", 2) == []
+    assert _parse_followups(text, 0) == []
+
+
+async def test_rlm_recursion_spawns_nested_research(project: dict, monkeypatch) -> None:
+    """При глубине 2 ветка, попросившая уточнение, порождает своё исследование."""
+    import uuid as _uuid
+
+    from app import config as app_config
+    from app.db import get_sessionmaker
+    from app.models import Project as ProjectModel
+    from app.services import rlm
+
+    monkeypatch.setenv("FAKE_CLAUDE_DEEP", "1")
+    monkeypatch.setenv("RLM_MAX_DEPTH", "2")
+    app_config.get_settings.cache_clear()
+
+    calls: list[int] = []
+    original_sub_query = rlm.sub_query
+
+    async def spy_sub_query(*args, **kwargs):
+        calls.append(int(kwargs.get("followup_limit", 0)))
+        return await original_sub_query(*args, **kwargs)
+
+    monkeypatch.setattr(rlm, "sub_query", spy_sub_query)
+    try:
+        async with get_sessionmaker()() as session:
+            proj = await session.get(ProjectModel, _uuid.UUID(project["id"]))
+        await rlm.answer(proj, "как устроен main.py?")
+    finally:
+        app_config.get_settings.cache_clear()
+
+    # верхний уровень спрашивал с разрешением углубиться, вложенный — уже без него
+    assert len(calls) >= 2, calls
+    assert calls[0] > 0, calls
+    assert calls[-1] == 0, calls
+
+
 async def test_rlm_survives_failed_synthesis(project: dict, monkeypatch) -> None:
     """Упавшая финальная сводка не должна съедать работу под-агентов.
 

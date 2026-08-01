@@ -156,6 +156,11 @@ def answer_for(prompt: str) -> str:
             ensure_ascii=False,
         )
     if "прорабатываешь короткую задачу в детальную" in prompt:
+        # Второй проход синтеза получает блок доисследования — значит вопросы закрыты.
+        second_pass = "Доисследование:" in prompt
+        unresolved = []
+        if os.environ.get("FAKE_CLAUDE_UNRESOLVED") == "1" and not second_pass:
+            unresolved = ["чем отдаётся ответ обработчика"]
         return json.dumps(
             {
                 "description": "Детальная проработка: обработчик в main.py не подключён. Нужно добавить onClick по аналогии с util.py.",
@@ -169,9 +174,28 @@ def answer_for(prompt: str) -> str:
                     {"title": "Сделать фичу А", "relation": "overlaps", "note": "общие файлы"}
                 ],
                 "duplicate_of": None,
+                "open_questions": [
+                    {
+                        "question": "Чинить обработчик или переносить логику в util.py?",
+                        "options": ["поправить на месте — быстрее", "перенести — единая точка"],
+                        "lean": "поправить на месте",
+                    }
+                ],
+                "impact": [
+                    {"what": "src/util.py", "why": "тот же обработчик используется оттуда"}
+                ],
+                "unresolved": unresolved,
             },
             ensure_ascii=False,
         )
+    if "Назначенные тебе файлы" in prompt:
+        # ветка просит углубления, только если ей это разрешили (блок про «НУЖНО УТОЧНИТЬ»)
+        if os.environ.get("FAKE_CLAUDE_DEEP") == "1" and "НУЖНО УТОЧНИТЬ" in prompt:
+            return (
+                "Тестовый ответ ассистента.\n\n"
+                "НУЖНО УТОЧНИТЬ:\n- чем именно отдаётся ответ обработчика\n"
+            )
+        return "Тестовый ответ ассистента."
     return "Тестовый ответ ассистента."
 
 
