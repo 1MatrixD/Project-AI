@@ -43,6 +43,40 @@ export default function PluginTab({ projectId }: { projectId: string }) {
       </div>
 
       <div className="card p-5 space-y-3">
+        <div className="font-medium">Скиллы плагина</div>
+        <p className="text-xs text-[var(--muted)]">
+          Генерируются из карты знаний при каждой индексации — Claude Code подхватит их автоматически.
+        </p>
+        {info.skills?.length ? (
+          <div className="space-y-2">
+            {info.skills.map((s) => (
+              <div key={s.name} className="border border-[var(--border)] rounded-lg p-3 space-y-0.5">
+                <div className="text-sm font-mono text-[var(--accent)]">/{s.name}</div>
+                <div className="text-xs text-[var(--muted)]">{s.description}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-[var(--muted)]">Появятся после индексации проекта</div>
+        )}
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <div className="font-medium">MCP-инструменты сервера projectai</div>
+        <p className="text-xs text-[var(--muted)]">
+          Доступны и чату внутри системы, и Claude Code после установки плагина.
+        </p>
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {info.mcp_tools?.map((t) => (
+            <div key={t.name} className="border border-[var(--border)] rounded-lg p-2.5 space-y-0.5">
+              <div className="text-xs font-mono text-[var(--accent)]">{t.name}</div>
+              <div className="text-xs text-[var(--muted)]">{t.description}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card p-5 space-y-3">
         <div className="font-medium">Установка</div>
         <ol className="text-sm space-y-3 list-decimal list-inside">
           <li>

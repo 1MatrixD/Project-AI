@@ -70,13 +70,24 @@ export type ChatMessage = {
 
 export type TaskStatus = "planned" | "in_progress" | "review" | "done" | "cancelled";
 
+export type PlanStep = { text: string; done: boolean };
+
+export type TaskExtra = {
+  enriched?: boolean;
+  original_description?: string;
+  files?: string[];
+  related?: { title: string; relation: string; note: string }[];
+  duplicate_of?: string | null;
+};
+
 export type Task = {
   id: string;
   title: string;
   description: string;
   status: TaskStatus;
   source: string;
-  plan: string[];
+  plan: PlanStep[];
+  extra: TaskExtra;
   report: string | null;
   created_at: string;
   done_at: string | null;
@@ -104,4 +115,6 @@ export type PluginInfo = {
   exists: boolean;
   marketplace_path: string;
   install_commands: string[];
+  skills: { name: string; description: string }[];
+  mcp_tools: { name: string; description: string }[];
 };

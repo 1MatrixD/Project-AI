@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import pathspec
+
 # каталоги, которые не несут знаний о проекте
 IGNORED_DIRS = {
     ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "env", "__pycache__",
@@ -86,6 +88,48 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _load_gitignore(dirpath: str) -> pathspec.PathSpec | None:
+    gi = os.path.join(dirpath, ".gitignore")
+    if not os.path.isfile(gi):
+        return None
+    try:
+        with open(gi, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+        spec = pathspec.GitIgnoreSpec.from_lines(lines)
+        return spec if spec.patterns else None
+    except OSError:
+        return None
+
+
+class _GitIgnoreStack:
+    """Вложенные .gitignore (монорепо): паттерны применяются относительно
+    каталога, в котором лежит .gitignore."""
+
+    def __init__(self, root: str) -> None:
+        self.root = os.path.abspath(root)
+        self._specs: dict[str, pathspec.PathSpec] = {}
+        spec = _load_gitignore(self.root)
+        if spec:
+            self._specs[self.root] = spec
+
+    def enter_dir(self, dirpath: str) -> None:
+        spec = _load_gitignore(dirpath)
+        if spec:
+            self._specs[os.path.abspath(dirpath)] = spec
+
+    def is_ignored(self, abs_path: str, is_dir: bool) -> bool:
+        abs_path = os.path.abspath(abs_path)
+        for base, spec in self._specs.items():
+            if abs_path == base or not abs_path.startswith(base + os.sep):
+                continue
+            rel = abs_path[len(base) + 1 :].replace("\\", "/")
+            if is_dir:
+                rel += "/"
+            if spec.match_file(rel):
+                return True
+        return False
+
+
 def scan_directory(
     root: str,
     known: dict[str, tuple[float, int, str]] | None = None,
@@ -95,17 +139,29 @@ def scan_directory(
 
     known: rel_path -> (mtime, size, sha256) из БД. Если mtime и size не изменились
     и не force — переиспользуем известный хэш (быстрые инкрементальные сканы).
+    Файлы и каталоги из .gitignore (включая вложенные) не попадают в индекс.
     """
     known = known or {}
     root_path = Path(root)
     if not root_path.is_dir():
         raise FileNotFoundError(f"Каталог не найден: {root}")
 
+    gitignore = _GitIgnoreStack(str(root_path))
     result: list[ScannedFile] = []
     for dirpath, dirnames, filenames in os.walk(root_path):
-        dirnames[:] = [d for d in dirnames if d.lower() not in IGNORED_DIRS and not d.startswith(".git")]
+        if os.path.abspath(dirpath) != gitignore.root:
+            gitignore.enter_dir(dirpath)
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d.lower() not in IGNORED_DIRS
+            and not d.startswith(".git")
+            and not gitignore.is_ignored(os.path.join(dirpath, d), is_dir=True)
+        ]
         for fn in filenames:
             if fn in IGNORED_FILES:
+                continue
+            if gitignore.is_ignored(os.path.join(dirpath, fn), is_dir=False):
                 continue
             ext = os.path.splitext(fn)[1].lower()
             if ext in IGNORED_EXTENSIONS:

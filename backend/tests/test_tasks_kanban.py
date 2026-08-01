@@ -84,6 +84,40 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     assert any(row["title"] == "Первая задача" and row["status"] == "done" for row in rows)
 
 
+async def test_enrich_task_rlm(user_client: httpx.AsyncClient, project: dict) -> None:
+    pid = project["id"]
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks",
+        json={"title": "Починить кнопку", "description": "коротко с созвона"},
+    )
+    task = r.json()
+    assert task["extra"] == {}
+
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{task['id']}/enrich")
+    assert r.status_code == 200
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["stats"]["enriched"] == 1
+
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    enriched = next(t for t in r.json() if t["id"] == task["id"])
+    assert "Детальная проработка" in enriched["description"]
+    assert enriched["extra"]["enriched"] is True
+    assert enriched["extra"]["original_description"] == "коротко с созвона"
+    assert "main.py" in enriched["extra"]["files"]
+    assert enriched["extra"]["related"][0]["relation"] == "overlaps"
+    # план — чекбокс-шаги
+    assert enriched["plan"][0] == {"text": "Посмотреть обработчик в main.py", "done": False}
+
+    # тоггл чекбокса
+    plan = enriched["plan"]
+    plan[0]["done"] = True
+    r = await user_client.patch(
+        f"/api/projects/{pid}/tasks/{task['id']}", json={"plan": plan}
+    )
+    assert r.json()["plan"][0]["done"] is True
+
+
 async def test_verify_tasks(user_client: httpx.AsyncClient, project: dict) -> None:
     pid = project["id"]
     # фейковый claude отвечает yes только для "Сделать фичу А"

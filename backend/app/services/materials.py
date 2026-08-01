@@ -39,13 +39,17 @@ async def extract_tasks_from_text(
     project: Project, title: str, source_kind: str, text: str
 ) -> dict:
     """ИИ-выжимка материала: summary + задачи. Возвращает {'summary', 'tasks': [...]}."""
+    from .task_enrich import list_existing_tasks_text
+
     s = get_settings()
     context = await graphdb.get_project_summary_context(str(project.id), 3000)
+    existing = await list_existing_tasks_text(project.id)
     prompt = TASK_EXTRACTION_PROMPT.format(
         project_name=project.name,
         source_kind=source_kind,
         title=title,
         project_context=context or "(проект ещё не проиндексирован)",
+        existing_tasks=existing,
         text=text[:MAX_TEXT_FOR_AI],
     )
     obj, _ = await claude_cli.run_json_prompt(
@@ -123,9 +127,12 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
 
         summary = ""
         created_tasks = 0
+        created_ids: list[str] = []
         if do_tasks:
             await runner.report(job_id, 0.55, "ИИ: выжимка и извлечение задач")
             try:
+                from ..schemas import normalize_plan
+
                 parsed = await extract_tasks_from_text(project, material.filename, dtype, text)
                 summary = str(parsed.get("summary", ""))[:4000]
                 tasks = parsed.get("tasks") or []
@@ -141,7 +148,7 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                             status="planned",
                             source="meeting" if dtype == "transcript" else "doc",
                             order=order,
-                            plan=[str(p)[:500] for p in (t.get("plan") or [])[:20]],
+                            plan=normalize_plan(t.get("plan")),
                         )
                         session.add(item)
                         await session.flush()
@@ -149,10 +156,17 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                             str(project_id), str(item.id), item.title, item.status
                         )
                         created_tasks += 1
+                        created_ids.append(str(item.id))
                     await session.commit()
             except claude_cli.ClaudeError as e:
                 log.warning("Извлечение задач из %s не удалось: %s", material.filename, e)
                 stats["task_extraction_error"] = str(e)[:500]
+
+        if created_ids:
+            # RLM-проработка новых задач: короткие формулировки с созвона →
+            # детальные задачи со ссылками на файлы
+            await runner.submit(project_id, "enrich_tasks", {"task_ids": created_ids})
+            stats["enrich_job_submitted"] = True
 
         await graphdb.upsert_document(
             str(project_id), str(material_id), material.filename, dtype, summary or text[:1000], []

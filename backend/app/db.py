@@ -40,7 +40,13 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
+    from sqlalchemy import text
+
     from . import models  # noqa: F401 — регистрация моделей
 
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # лёгкие идемпотентные миграции для существующих установок
+        await conn.execute(
+            text("ALTER TABLE task_items ADD COLUMN IF NOT EXISTS extra JSONB DEFAULT '{}'::jsonb")
+        )

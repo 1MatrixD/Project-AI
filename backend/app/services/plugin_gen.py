@@ -242,11 +242,56 @@ async def plugin_generate_job(job_id: uuid.UUID, project_id: uuid.UUID, params: 
     return {"plugin_path": path}
 
 
+# описания MCP-инструментов проекта (для UI; сам сервер — app/mcp/server.py)
+MCP_TOOLS_INFO = [
+    {"name": "project_overview", "description": "Обзор проекта: описание, стек, компоненты, статистика карты знаний"},
+    {"name": "graph_search", "description": "Полнотекстовый поиск по карте знаний (файлы, сущности, компоненты, документы, задачи)"},
+    {"name": "graph_cypher", "description": "Read-only Cypher-запрос к графу Neo4j"},
+    {"name": "list_files", "description": "Реестр файлов проекта с ролями из ИИ-анализа"},
+    {"name": "list_documents", "description": "Материалы: транскрипты созвонов, ТЗ, документы"},
+    {"name": "read_document", "description": "Чтение текста материала (транскрипта/документа)"},
+    {"name": "rlm_query", "description": "Рекурсивный анализ кодовой базы (RLM): под-агенты читают файлы и возвращают ответ"},
+    {"name": "task_list", "description": "Канбан-доска задач проекта"},
+    {"name": "task_create", "description": "Создать задачу в канбане"},
+    {"name": "task_update", "description": "Улучшить/уточнить задачу (название, описание, план)"},
+    {"name": "task_move", "description": "Переместить задачу между колонками"},
+    {"name": "task_done", "description": "Пометить выполненной с отчётом → суб-агент обновит карту знаний"},
+    {"name": "task_enrich", "description": "RLM-проработка: короткая задача → детальная со ссылками на файлы"},
+    {"name": "log_work", "description": "Зафиксировать сделанную работу → суб-агент обновит карту знаний"},
+    {"name": "request_reindex", "description": "Запустить обновление индекса (update/reverify)"},
+]
+
+
+def _read_skill_meta(skill_dir: Path) -> dict | None:
+    md = skill_dir / "SKILL.md"
+    if not md.is_file():
+        return None
+    try:
+        text = md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    meta = {"name": skill_dir.name, "description": ""}
+    if text.startswith("---"):
+        for line in text[3:].split("---", 1)[0].splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                if k.strip() in ("name", "description"):
+                    meta[k.strip()] = v.strip()
+    return meta
+
+
 def plugin_install_info(project: Project) -> dict:
     s = get_settings()
     slug = f"projectai-{slugify(project.name)}"
     plugin_dir = s.data_path / "plugins" / slug
     marketplace_dir = s.data_path / "plugins"
+    skills = []
+    skills_dir = plugin_dir / "skills"
+    if skills_dir.is_dir():
+        for child in sorted(skills_dir.iterdir()):
+            meta = _read_skill_meta(child)
+            if meta:
+                skills.append(meta)
     return {
         "slug": slug,
         "path": str(plugin_dir),
@@ -256,4 +301,6 @@ def plugin_install_info(project: Project) -> dict:
             f"claude plugin marketplace add {marketplace_dir}",
             f"claude plugin install {slug}@projectai",
         ],
+        "skills": skills,
+        "mcp_tools": MCP_TOOLS_INFO,
     }

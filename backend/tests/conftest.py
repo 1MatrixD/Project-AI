@@ -75,7 +75,7 @@ async def client():
     from app.db import init_db
     from app.jobs_runner import runner
     from app.main import app
-    from app.services import graphdb, indexer
+    from app.services import graphdb, indexer, task_enrich
     from app.services.materials import process_material
     from app.services.plugin_gen import plugin_generate_job
 
@@ -87,6 +87,7 @@ async def client():
     runner.register("index", indexer.index_project)
     runner.register("knowledge_update", indexer.knowledge_update)
     runner.register("verify_tasks", indexer.verify_tasks)
+    runner.register("enrich_tasks", task_enrich.enrich_tasks)
     runner.register("process_material", process_material)
     runner.register("plugin_generate", plugin_generate_job)
     await runner.start()

@@ -144,7 +144,10 @@ class TaskItem(Base):
     status: Mapped[str] = mapped_column(String(24), default="planned")
     source: Mapped[str] = mapped_column(String(24), default="manual")  # manual | chat | meeting
     order: Mapped[float] = mapped_column(Float, default=0.0)  # позиция в колонке канбана
+    # шаги плана: [{"text": str, "done": bool}]
     plan: Mapped[list] = mapped_column(JSONB, default=list)
+    # RLM-проработка: {"enriched": bool, "related": [...], "files": [...], "duplicate_of": str|None}
+    extra: Mapped[dict] = mapped_column(JSONB, default=dict)
     report: Mapped[str | None] = mapped_column(Text, nullable=True)  # что сделано
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

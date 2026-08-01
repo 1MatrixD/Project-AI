@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -144,11 +144,28 @@ class MessageOut(ORMModel):
 
 # --- tasks ---
 
+class PlanStep(BaseModel):
+    text: str
+    done: bool = False
+
+
+def normalize_plan(plan: list | None) -> list[dict]:
+    """Строки и объекты → [{"text", "done"}] (обратная совместимость)."""
+    out: list[dict] = []
+    for item in (plan or [])[:40]:
+        if isinstance(item, dict) and item.get("text"):
+            out.append({"text": str(item["text"])[:500], "done": bool(item.get("done"))})
+        elif isinstance(item, str) and item.strip():
+            out.append({"text": item.strip()[:500], "done": False})
+    return out
+
+
 class TaskCreateIn(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
     source: str = "manual"
     plan: list = []
+    enrich: bool = False  # сразу отправить на RLM-проработку
 
 
 class TaskUpdateIn(BaseModel):
@@ -163,17 +180,27 @@ class TaskDoneIn(BaseModel):
     files: list[str] = []
 
 
+class TasksEnrichIn(BaseModel):
+    task_ids: list[uuid.UUID] | None = None  # None = все planned без проработки
+
+
 class TaskOut(ORMModel):
     id: uuid.UUID
     title: str
     description: str
     status: str
     source: str
-    plan: list
+    plan: list[PlanStep]
+    extra: dict
     report: str | None
     created_at: datetime
     updated_at: datetime
     done_at: datetime | None
+
+    @field_validator("plan", mode="before")
+    @classmethod
+    def _norm_plan(cls, v: list | None) -> list[dict]:
+        return normalize_plan(v)
 
 
 # --- worklog ---

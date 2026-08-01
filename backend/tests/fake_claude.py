@@ -84,6 +84,23 @@ def answer_for(prompt: str) -> str:
         )
     if '"groups"' in prompt or "групп файлов для рекурсивного анализа" in prompt:
         return json.dumps({"groups": [{"focus": "тест", "paths": ["main.py"]}]}, ensure_ascii=False)
+    if "прорабатываешь короткую задачу в детальную" in prompt:
+        return json.dumps(
+            {
+                "description": "Детальная проработка: обработчик в main.py не подключён. Нужно добавить onClick по аналогии с util.py.",
+                "plan": [
+                    {"text": "Посмотреть обработчик в main.py"},
+                    {"text": "Подключить вызов по аналогии с src/util.py"},
+                    {"text": "Проверить в браузере"},
+                ],
+                "files": ["main.py", "src/util.py"],
+                "related_tasks": [
+                    {"title": "Сделать фичу А", "relation": "overlaps", "note": "общие файлы"}
+                ],
+                "duplicate_of": None,
+            },
+            ensure_ascii=False,
+        )
     return "Тестовый ответ ассистента."
 
 

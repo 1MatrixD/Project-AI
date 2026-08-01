@@ -11,7 +11,7 @@ from .config import get_settings
 from .db import init_db
 from .jobs_runner import runner
 from .routers import auth, chats, files, fs, jobs, materials, projects, tasks
-from .services import graphdb, indexer
+from .services import graphdb, indexer, task_enrich
 from .services.materials import process_material
 from .services.plugin_gen import plugin_generate_job
 
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     runner.register("index", indexer.index_project)
     runner.register("knowledge_update", indexer.knowledge_update)
     runner.register("verify_tasks", indexer.verify_tasks)
+    runner.register("enrich_tasks", task_enrich.enrich_tasks)
     runner.register("process_material", process_material)
     runner.register("plugin_generate", plugin_generate_job)
     await runner.start()

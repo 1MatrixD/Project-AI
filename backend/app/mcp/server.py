@@ -166,6 +166,16 @@ async def log_work(description: str, files: list[str] | None = None, task_id: st
 
 
 @mcp.tool()
+async def task_enrich(task_id: str | None = None) -> str:
+    """RLM-проработка задач: короткая формулировка → детальная задача со ссылками
+    на файлы, планом-чеклистом и связями с существующими задачами. Без task_id
+    прорабатываются все новые задачи. Выполняется в фоне."""
+    if task_id:
+        return _fmt(await _post(f"{P}/tasks/{task_id}/enrich"))
+    return _fmt(await _post(f"{P}/tasks/enrich", {}))
+
+
+@mcp.tool()
 async def request_reindex(mode: str = "update") -> str:
     """Запустить фоновое обновление индекса проекта. mode: update (только изменения)
     или reverify (перепроверить всё)."""

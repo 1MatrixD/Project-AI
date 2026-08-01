@@ -14,9 +14,11 @@ from ..schemas import (
     TaskCreateIn,
     TaskDoneIn,
     TaskOut,
+    TasksEnrichIn,
     TaskUpdateIn,
     WorkLogIn,
     WorkLogOut,
+    normalize_plan,
 )
 from ..services import graphdb
 
@@ -73,13 +75,15 @@ async def create_task(
         title=data.title.strip(),
         description=data.description,
         source=data.source if data.source in ("manual", "chat", "meeting", "doc") else "manual",
-        plan=[str(p)[:500] for p in data.plan[:30]],
+        plan=normalize_plan(data.plan),
         order=await _next_order(session, project.id, "planned"),
     )
     session.add(task)
     await session.commit()
     await session.refresh(task)
     await _sync_task_node(project, task)
+    if data.enrich:
+        await runner.submit(project.id, "enrich_tasks", {"task_ids": [str(task.id)]})
     return TaskOut.model_validate(task)
 
 
@@ -96,7 +100,7 @@ async def update_task(
     if data.description is not None:
         task.description = data.description[:8000]
     if data.plan is not None:
-        task.plan = [str(p)[:500] for p in data.plan[:30]]
+        task.plan = normalize_plan(data.plan)
     if data.status is not None:
         if data.status not in VALID_STATUSES:
             raise HTTPException(status_code=400, detail=f"Статус: {', '.join(sorted(VALID_STATUSES))}")
@@ -180,6 +184,31 @@ async def verify_tasks_endpoint(project: Project = Depends(get_project)) -> dict
     if await runner.has_active(project.id, ["verify_tasks"]):
         raise HTTPException(status_code=409, detail="Проверка уже идёт")
     job = await runner.submit(project.id, "verify_tasks", {})
+    return {"job_id": str(job.id)}
+
+
+@router.post("/tasks/enrich")
+async def enrich_tasks_endpoint(
+    data: TasksEnrichIn, project: Project = Depends(get_project)
+) -> dict:
+    """RLM-проработка: короткие задачи → детальные со ссылками на файлы."""
+    if await runner.has_active(project.id, ["enrich_tasks"]):
+        raise HTTPException(status_code=409, detail="Проработка уже идёт")
+    params: dict = {}
+    if data.task_ids:
+        params["task_ids"] = [str(t) for t in data.task_ids]
+    job = await runner.submit(project.id, "enrich_tasks", params)
+    return {"job_id": str(job.id)}
+
+
+@router.post("/tasks/{task_id}/enrich")
+async def enrich_one_task(
+    task_id: uuid.UUID,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await _get_task(session, project, task_id)
+    job = await runner.submit(project.id, "enrich_tasks", {"task_ids": [str(task_id)]})
     return {"job_id": str(job.id)}
 
 

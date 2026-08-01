@@ -65,3 +65,27 @@ def test_classify_tests() -> None:
     assert classify("tests/test_api.py", 100) == "test"
     assert classify("src/service.spec.ts", 100) == "test"
     assert classify("src/service.ts", 100) == "code"
+
+
+def test_gitignore_respected(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text("build/\n*.log\nsecret.txt\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "artifact.js").write_text("x", encoding="utf-8")
+    (tmp_path / "app.log").write_text("log", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("s", encoding="utf-8")
+    (tmp_path / "main.py").write_text("ok", encoding="utf-8")
+    # вложенный подпроект со своим .gitignore (монорепо)
+    sub = tmp_path / "mobile"
+    sub.mkdir()
+    (sub / ".gitignore").write_text("*.freezed.dart\n.dart_tool/\n", encoding="utf-8")
+    (sub / "model.freezed.dart").write_text("gen", encoding="utf-8")
+    (sub / "model.dart").write_text("code", encoding="utf-8")
+
+    paths = {f.rel_path for f in scan_directory(str(tmp_path))}
+    assert "main.py" in paths
+    assert "mobile/model.dart" in paths
+    assert ".gitignore" in paths  # сам .gitignore — часть проекта
+    assert not any(p.startswith("build/") for p in paths)
+    assert "app.log" not in paths
+    assert "secret.txt" not in paths
+    assert "mobile/model.freezed.dart" not in paths
