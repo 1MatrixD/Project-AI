@@ -79,13 +79,24 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
 
     stats: dict = {}
     try:
-        if extract.is_audio_video(material.filename):
+        tpath = material_text_path(project_id, material_id)
+        is_av = extract.is_audio_video(material.filename)
+        dtype = "transcript" if is_av else "doc"
+
+        import os
+
+        if params.get("reuse_text") and os.path.isfile(tpath):
+            # повторная обработка: текст уже извлечён/транскрибирован
+            text = await asyncio.to_thread(
+                lambda: open(tpath, "r", encoding="utf-8").read()
+            )
+            stats["reused_text"] = True
+        elif is_av:
             await runner.report(job_id, 0.1, "Транскрибация (whisper)")
             from . import transcribe
 
             result = await asyncio.to_thread(transcribe.transcribe_file, material.stored_path)
             text = result["text"]
-            dtype = "transcript"
             stats["transcribe"] = {
                 "language": result["language"],
                 "duration_sec": result["duration"],
@@ -94,17 +105,21 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
         else:
             await runner.report(job_id, 0.1, "Извлечение текста")
             text = await asyncio.to_thread(extract.extract_text, material.stored_path)
-            dtype = "doc"
 
         text = text.strip()
         if not text:
             raise RuntimeError("Пустой текст после обработки")
 
-        tpath = material_text_path(project_id, material_id)
         await asyncio.to_thread(
             lambda: open(tpath, "w", encoding="utf-8").write(text)
         )
         stats["text_chars"] = len(text)
+        # текст доступен сразу, даже если дальнейшие ИИ-шаги упадут
+        async with maker() as session:
+            await session.execute(
+                update(Material).where(Material.id == material_id).values(text_path=tpath)
+            )
+            await session.commit()
 
         summary = ""
         created_tasks = 0

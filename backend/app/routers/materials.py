@@ -135,7 +135,12 @@ async def reprocess_material(
     await runner.submit(
         project.id,
         "process_material",
-        {"material_id": str(material.id), "extract_tasks": extract_tasks},
+        {
+            "material_id": str(material.id),
+            "extract_tasks": extract_tasks,
+            # транскрипт/текст уже есть — не пересчитывать
+            "reuse_text": bool(material.text_path),
+        },
     )
     material.status = "processing"
     await session.commit()

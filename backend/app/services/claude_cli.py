@@ -48,8 +48,12 @@ def _build_env(reasoning: str | None) -> dict:
     return env
 
 
+# лимит командной строки Windows ~32767 символов — длинные промпты идут через stdin
+MAX_ARGV_PROMPT = 20000
+
+
 def _base_cmd(
-    prompt: str,
+    prompt: str | None,
     *,
     system: str | None,
     tools: list[str] | None,
@@ -59,7 +63,10 @@ def _base_cmd(
     output_format: str,
     max_turns: int | None = None,
 ) -> list[str]:
-    cmd = [*resolve_cmd_prefix(), "-p", prompt, "--output-format", output_format]
+    cmd = [*resolve_cmd_prefix(), "-p"]
+    if prompt is not None:
+        cmd.append(prompt)
+    cmd += ["--output-format", output_format]
     if output_format == "stream-json":
         cmd.append("--verbose")
     if system:
@@ -77,15 +84,21 @@ def _base_cmd(
     return cmd
 
 
-def _run_sync(cmd: list[str], cwd: str | None, env: dict, timeout: int) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        timeout=timeout,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
+def _run_sync(
+    cmd: list[str], cwd: str | None, env: dict, timeout: int, stdin_data: bytes | None = None
+) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            input=stdin_data,
+            capture_output=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except OSError as e:
+        raise ClaudeError(f"Не удалось запустить claude: {e}")
     out = proc.stdout.decode("utf-8", errors="replace")
     err = proc.stderr.decode("utf-8", errors="replace")
     return proc.returncode, out, err
@@ -105,8 +118,9 @@ async def run_prompt(
 ) -> dict:
     """Одиночный вызов claude -p, возвращает распарсенный result-JSON CLI."""
     s = get_settings()
+    use_stdin = len(prompt) > MAX_ARGV_PROMPT
     cmd = _base_cmd(
-        prompt,
+        None if use_stdin else prompt,
         system=system,
         tools=tools,
         model=model,
@@ -117,7 +131,12 @@ async def run_prompt(
     )
     env = _build_env(reasoning)
     code, out, err = await asyncio.to_thread(
-        _run_sync, cmd, cwd, env, timeout or s.claude_timeout_sec
+        _run_sync,
+        cmd,
+        cwd,
+        env,
+        timeout or s.claude_timeout_sec,
+        prompt.encode("utf-8") if use_stdin else None,
     )
     if code != 0 and not out.strip():
         raise ClaudeError(f"claude завершился с кодом {code}: {err[:2000]}")
@@ -187,8 +206,9 @@ async def stream_prompt(
 ) -> AsyncIterator[dict]:
     """Стриминг stream-json событий claude -p (через поток, безопасно для Windows)."""
     s = get_settings()
+    use_stdin = len(prompt) > MAX_ARGV_PROMPT
     cmd = _base_cmd(
-        prompt,
+        None if use_stdin else prompt,
         system=system,
         tools=tools,
         model=model,
@@ -201,14 +221,25 @@ async def stream_prompt(
     queue: asyncio.Queue = asyncio.Queue()
     _SENTINEL = object()
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.PIPE if use_stdin else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except OSError as e:
+        yield {"type": "process_error", "code": -1, "stderr": f"Не удалось запустить claude: {e}"}
+        return
+    if use_stdin and proc.stdin is not None:
+        try:
+            proc.stdin.write(prompt.encode("utf-8"))
+            proc.stdin.close()
+        except OSError:
+            pass
 
     def reader() -> None:
         try:
