@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
+from .config import get_settings
 from .db import get_sessionmaker
 from .models import Job, utcnow
 
@@ -223,4 +224,4 @@ class JobRunner:
         await self._publish_job(job_id)
 
 
-runner = JobRunner()
+runner = JobRunner(get_settings().job_concurrency)

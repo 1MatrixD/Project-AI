@@ -339,7 +339,9 @@ async def answer(
             system=ROOT_SYNTH_SYSTEM,
             tools=[],
             model=s.ai_model,
-            reasoning="medium",
+            # факты уже собраны под-агентами, синтезу остаётся их свести:
+            # долгое размышление тут только жжёт ходы и время
+            reasoning="low",
             max_turns=s.claude_max_turns,
             timeout=s.claude_timeout_sec,
         )

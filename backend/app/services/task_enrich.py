@@ -134,7 +134,7 @@ async def enrich_one(
     unresolved = [
         str(u).strip()[:300] for u in (obj.get("unresolved") or [])[:5] if str(u).strip()
     ]
-    if unresolved and investigation_ok:
+    if unresolved and investigation_ok and s.enrich_followup:
         await report(0.72, f"доисследование: вопросов без ответа — {len(unresolved)}")
 
         async def followup_stage(value: float, detail: str) -> None:
