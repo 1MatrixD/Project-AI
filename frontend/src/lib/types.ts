@@ -138,6 +138,10 @@ export type PluginInfo = {
   exists: boolean;
   marketplace_path: string;
   install_commands: string[];
+  // установка «только в этот проект»: <root>/.claude/settings.local.json
+  local_settings_path: string;
+  local_settings: Record<string, unknown>;
+  installed_locally: boolean;
   skills: { name: string; description: string }[];
   mcp_tools: { name: string; description: string }[];
 };

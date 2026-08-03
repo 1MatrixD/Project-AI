@@ -9,6 +9,7 @@ type PluginFile = { path: string; size: number };
 export default function PluginTab({ projectId }: { projectId: string }) {
   const [info, setInfo] = useState<PluginInfo | null>(null);
   const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
   const [browserOpen, setBrowserOpen] = useState<string | null>(null); // стартовый файл
 
   const load = useCallback(async () => {
@@ -23,6 +24,38 @@ export default function PluginTab({ projectId }: { projectId: string }) {
     await api(`/projects/${projectId}/plugin/regenerate`, { method: "POST" });
     setNotice("Плагин перегенерируется в фоне со свежими знаниями из карты.");
     setTimeout(load, 3000);
+  }
+
+  async function installLocal() {
+    setBusy(true);
+    setNotice("");
+    try {
+      const r = await api<{ path: string }>(`/projects/${projectId}/plugin/local`, {
+        method: "POST",
+      });
+      setNotice(
+        `Готово: ${r.path}. Перезапусти Claude Code в каталоге проекта — плагин подхватится там и только там.`
+      );
+      await load();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uninstallLocal() {
+    setBusy(true);
+    setNotice("");
+    try {
+      await api(`/projects/${projectId}/plugin/local`, { method: "DELETE" });
+      setNotice("Плагин убран из настроек проекта.");
+      await load();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!info) return <div className="text-[var(--muted)]">Загрузка…</div>;
@@ -89,25 +122,51 @@ export default function PluginTab({ projectId }: { projectId: string }) {
       <ToolAccessCard projectId={projectId} />
 
       <div className="card p-5 space-y-3">
-        <div className="font-medium">Установка</div>
-        <ol className="text-sm space-y-3 list-decimal list-inside">
-          <li>
-            Добавь маркетплейс «Проекты ИИ» (один раз):
-            <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
-              claude plugin marketplace add {info.marketplace_path}
-            </pre>
-          </li>
-          <li>
-            Установи плагин проекта:
-            <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
-              claude plugin install {info.slug}@projectai
-            </pre>
-          </li>
-          <li>
-            Открой Claude Code в каталоге проекта — инструменты <code className="font-mono text-xs">projectai</code> и
-            скиллы подхватятся автоматически.
-          </li>
-        </ol>
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-medium">Установка</div>
+          {info.installed_locally && (
+            <span className="chip text-emerald-300">включён в проекте</span>
+          )}
+        </div>
+        <p className="text-sm text-[var(--muted)] leading-relaxed">
+          Плагин может жить <b>только в этом проекте</b> — тогда он подключается, когда
+          Claude Code запущен в каталоге проекта, и не мешается в остальных. Настройка
+          пишется в <code className="font-mono text-xs">{info.local_settings_path}</code>;
+          чужие ключи в этом файле не трогаются.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          <button className="btn" onClick={installLocal} disabled={busy}>
+            {info.installed_locally ? "Переустановить в проект" : "Включить в этом проекте"}
+          </button>
+          {info.installed_locally && (
+            <button className="btn btn-ghost" onClick={uninstallLocal} disabled={busy}>
+              Убрать из проекта
+            </button>
+          )}
+        </div>
+        <details className="text-sm">
+          <summary className="cursor-pointer text-[var(--muted)] hover:text-[var(--foreground)]">
+            Поставить глобально (во всех проектах машины)
+          </summary>
+          <ol className="space-y-3 list-decimal list-inside mt-2">
+            <li>
+              Добавь маркетплейс «Проекты ИИ» (один раз):
+              <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
+                claude plugin marketplace add {info.marketplace_path}
+              </pre>
+            </li>
+            <li>
+              Установи плагин проекта:
+              <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
+                claude plugin install {info.slug}@projectai
+              </pre>
+            </li>
+            <li>
+              Так плагин попадёт в <code className="font-mono text-xs">~/.claude/settings.json</code> и
+              будет виден во всех сессиях Claude Code на машине.
+            </li>
+          </ol>
+        </details>
       </div>
 
       {browserOpen !== null && (

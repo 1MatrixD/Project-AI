@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { API_URL, api, fmtDate, getToken } from "@/lib/api";
+import { pickDirNative } from "@/lib/pickDir";
 import type { ChangeReport, Decision, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import DirPicker from "@/components/DirPicker";
@@ -78,6 +79,18 @@ export default function OverviewTab({
         body: JSON.stringify({ path }),
       });
       onAction();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    }
+  }
+
+  /** Как и при создании проекта: сначала системный диалог, DirPicker — запасной. */
+  async function browseRoot() {
+    setError("");
+    try {
+      const p = await pickDirNative(project.root_path);
+      if (p === "unsupported") setShowRootPicker(true);
+      else if (p) await addRoot(p);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     }
@@ -215,7 +228,7 @@ export default function OverviewTab({
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
-                      onClick={() => { setShowMenu(false); setShowRootPicker(true); }}
+                      onClick={() => { setShowMenu(false); browseRoot(); }}
                     >
                       🗂 Добавить каталог
                       <span className="block text-[11px] text-[var(--muted)]">
@@ -303,6 +316,11 @@ export default function OverviewTab({
         {overview?.conventions ? (
           <div className="card p-5 space-y-2">
             <div className="font-medium">Конвенции</div>
+            <div className="text-xs text-[var(--muted)] leading-relaxed">
+              Как код написан <b>по факту</b>: ИИ вывел это сам при индексации, руками не
+              правится и перезаписывается на каждом прогоне. То, о чём <b>договорились</b>,
+              — в карточке «Соглашения проекта».
+            </div>
             <p className="text-sm text-[var(--muted)] whitespace-pre-wrap leading-relaxed">{overview.conventions}</p>
           </div>
         ) : null}
@@ -632,11 +650,17 @@ function DecisionsCard({ projectId }: { projectId: string }) {
         </button>
       </div>
       <div className="text-xs text-[var(--muted)] leading-relaxed">
-        Память о том, «как в проекте принято сейчас», — когда подход менялся со временем.
-        Пример: «роль ORGANIZER упразднена, теперь MANAGER + права». Без такой заметки ИИ
-        найдёт в коде остатки старого подхода и назовёт их багом; с ней — поймёт, что это
-        осознанное решение. ИИ сверяется с соглашениями при проработке задач, проверках и
-        git-импорте. Пополняются вручную, из созвонов (автоматически) и через чат.
+        То, чего <b>в коде не прочитать</b>: что считается правильным сейчас и от чего
+        отказались. Пишет сюда человек — этим карточка отличается от «Конвенций», которые
+        ИИ выводит из кода сам.
+        <br />
+        Зачем: код обычно отстаёт от решений. Без заметки «роль ORGANIZER упразднена, теперь
+        MANAGER + права» ИИ найдёт остатки старого подхода и заведёт их как баг; с ней —
+        поймёт, что это осознанный переход, и будет доделывать миграцию, а не откатывать её.
+        Соглашения подмешиваются в проработку задач, декомпозицию, ИИ-проверку «что уже
+        сделано», git-импорт и чат.
+        <br />
+        Пополняются вручную, автоматически из созвонов и через чат (record_decision).
       </div>
       {showAdd && (
         <form onSubmit={add} className="space-y-2">

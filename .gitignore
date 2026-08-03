@@ -1,6 +1,8 @@
 # env / secrets
 .env
 *.local
+# локальные настройки Claude Code: абсолютные пути этой машины
+.claude/settings.local.json
 
 # python
 .venv/
