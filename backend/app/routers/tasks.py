@@ -78,7 +78,7 @@ async def create_task(
     task = TaskItem(
         project_id=project.id,
         title=data.title.strip(),
-        description=data.description,
+        description=data.description[:8000],
         source=data.source if data.source in ("manual", "chat", "meeting", "doc") else "manual",
         plan=normalize_plan(data.plan),
         order=await _next_order(session, project.id, "planned"),
@@ -238,13 +238,21 @@ async def enrich_tasks_endpoint(
     data: TasksEnrichIn, project: Project = Depends(get_project)
 ) -> dict:
     """RLM-проработка: короткие задачи → детальные со ссылками на файлы."""
+    from ..services.task_enrich import count_pending
+
     if await runner.has_active(project.id, ["enrich_tasks"]):
         raise HTTPException(status_code=409, detail="Проработка уже идёт")
     params: dict = {}
     if data.task_ids:
         params["task_ids"] = [str(t) for t in data.task_ids]
+        pending = len(data.task_ids)
+    else:
+        # считаем заранее, иначе UI обещает работу даже когда всё уже проработано
+        pending = await count_pending(project.id)
+        if not pending:
+            return {"job_id": None, "tasks": 0}
     job = await runner.submit(project.id, "enrich_tasks", params)
-    return {"job_id": str(job.id)}
+    return {"job_id": str(job.id), "tasks": pending}
 
 
 @router.post("/tasks/{task_id}/plan")

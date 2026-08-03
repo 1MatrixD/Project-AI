@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+#: сколько текста задачи уходит в промпты проработки и декомпозиции. Совпадает с
+#: потолком хранения description (8000): формулировку пользователя нельзя резать
+#: по дороге, иначе длинное ТЗ теряет как раз ту часть, ради которой его писали.
+TASK_TEXT_LIMIT = 8000
+
 FILE_ANALYSIS_SYSTEM = (
     "You are a senior software analyst building a project knowledge graph. "
     "You read files with the Read tool and answer ONLY with valid JSON, no prose."

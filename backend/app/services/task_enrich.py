@@ -17,6 +17,7 @@ from .prompts import (
     TASK_ENRICH_INVESTIGATION_QUESTION,
     TASK_ENRICH_PROMPT,
     TASK_ENRICH_SYSTEM,
+    TASK_TEXT_LIMIT,
 )
 
 log = logging.getLogger("projectai.enrich")
@@ -75,7 +76,7 @@ async def enrich_one(
     # 1. RLM-исследование кодовой базы по задаче (самая долгая фаза — до 60%)
     question = TASK_ENRICH_INVESTIGATION_QUESTION.format(
         title=task.title,
-        description=(task.description or "")[:2000],
+        description=(task.description or "")[:TASK_TEXT_LIMIT],
         decisions=decisions,
     )
 
@@ -107,7 +108,7 @@ async def enrich_one(
         prompt = TASK_ENRICH_PROMPT.format(
             project_name=project.name,
             title=task.title,
-            description=(task.description or "(без описания)")[:2000],
+            description=(task.description or "(без описания)")[:TASK_TEXT_LIMIT],
             project_context=context,
             decisions=decisions,
             investigation=facts[:20000],
@@ -216,22 +217,32 @@ async def enrich_one(
     }
 
 
+async def select_tasks(session, project_id: uuid.UUID, task_ids: list | None) -> list[TaskItem]:
+    """Что пойдёт в проработку. Без `task_ids` — открытые задачи без проработки:
+    именно это делает кнопка «Проработать новые (RLM)»."""
+    q = select(TaskItem).where(TaskItem.project_id == project_id)
+    if task_ids:
+        q = q.where(TaskItem.id.in_([uuid.UUID(str(t)) for t in task_ids]))
+    else:
+        q = q.where(TaskItem.status.in_(["planned", "in_progress"]))
+    res = await session.execute(q.order_by(TaskItem.created_at))
+    return [t for t in res.scalars() if task_ids or not (t.extra or {}).get("enriched")]
+
+
+async def count_pending(project_id: uuid.UUID) -> int:
+    """Сколько задач возьмёт «Проработать новые» — чтобы UI не обещал работу,
+    которой не будет."""
+    async with get_sessionmaker()() as session:
+        return len(await select_tasks(session, project_id, None))
+
+
 async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
     s = get_settings()
     async with get_sessionmaker()() as session:
         project = await session.get(Project, project_id)
         if project is None:
             raise RuntimeError("Проект не найден")
-        q = select(TaskItem).where(TaskItem.project_id == project_id)
-        task_ids = params.get("task_ids")
-        if task_ids:
-            q = q.where(TaskItem.id.in_([uuid.UUID(str(t)) for t in task_ids]))
-        else:
-            q = q.where(TaskItem.status.in_(["planned", "in_progress"]))
-        res = await session.execute(q.order_by(TaskItem.created_at))
-        tasks = [
-            t for t in res.scalars() if task_ids or not (t.extra or {}).get("enriched")
-        ]
+        tasks = await select_tasks(session, project_id, params.get("task_ids"))
 
     if not tasks:
         return {"enriched": 0, "errors": 0, "total": 0}

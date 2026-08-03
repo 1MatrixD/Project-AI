@@ -20,6 +20,39 @@ async def project(user_client: httpx.AsyncClient, sample_project_dir: Path) -> d
     return project
 
 
+async def test_long_task_text_goes_into_description(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Формулировка задачи бывает длиннее 300 символов. title остаётся коротким
+    заголовком карточки, а полный текст едет в description — и не режется."""
+    pid = project["id"]
+    long_text = (
+        "Хочу переделать выбор каталога при создании проекта. "
+        "Сейчас это самописная модалка, а хочется системный диалог Windows. " * 12
+    )
+    assert len(long_text) > 300
+
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks",
+        json={"title": long_text[:120] + "…", "description": long_text},
+    )
+    assert r.status_code == 201, r.text
+    task = r.json()
+    assert task["description"] == long_text
+    assert len(task["title"]) <= 300
+
+    # заголовок длиннее 300 по-прежнему отвергается — это подпись, а не текст
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks", json={"title": long_text}
+    )
+    assert r.status_code == 422
+
+    # промпты проработки берут текст задачи целиком, а не первые 2000 символов
+    from app.services.prompts import TASK_TEXT_LIMIT
+
+    assert TASK_TEXT_LIMIT >= 8000
+
+
 async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> None:
     pid = project["id"]
 
@@ -157,6 +190,49 @@ async def test_rlm_survives_failed_synthesis(project: dict, monkeypatch) -> None
     assert res["sub_queries"], res
     # вместо исключения вернулись выводы под-агентов, а не пустота
     assert "Группа:" in res["answer"], res["answer"][:300]
+
+
+async def test_enrich_all_new_takes_only_unenriched(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Кнопка «Проработать новые (RLM)»: берёт открытые задачи без проработки и
+    не трогает ни уже проработанные, ни закрытые — иначе каждое нажатие гоняло бы
+    RLM по всей доске заново."""
+    pid = project["id"]
+
+    async def add(title: str) -> dict:
+        r = await user_client.post(f"/api/projects/{pid}/tasks", json={"title": title})
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    fresh = await add("Свежая задача")
+    already = await add("Уже проработанная")
+    closed = await add("Давно закрытая")
+
+    # одну прорабатываем точечно, другую закрываем
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{already['id']}/enrich")
+    await wait_job(user_client, pid, r.json()["job_id"])
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks/{closed['id']}/done", json={"report": "сделано", "files": []}
+    )
+    assert r.status_code == 200, r.text
+
+    # «Проработать новые» — без task_ids
+    r = await user_client.post(f"/api/projects/{pid}/tasks/enrich", json={})
+    assert r.status_code == 200, r.text
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["stats"]["total"] == 1, job["stats"]
+    assert job["stats"]["enriched"] == 1, job["stats"]
+
+    tasks = {t["id"]: t for t in (await user_client.get(f"/api/projects/{pid}/tasks")).json()}
+    assert tasks[fresh["id"]]["extra"]["enriched"] is True
+    assert tasks[closed["id"]]["extra"] == {}, "закрытая задача не должна попадать в проработку"
+
+    # повторное нажатие: брать нечего, и UI об этом узнаёт сразу, а не обещает работу
+    r = await user_client.post(f"/api/projects/{pid}/tasks/enrich", json={})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"job_id": None, "tasks": 0}
 
 
 async def test_enrich_task_rlm(

@@ -165,6 +165,7 @@ def normalize_plan(plan: list | None) -> list[dict]:
 
 
 class TaskCreateIn(BaseModel):
+    #: короткая подпись для карточки канбана; длинная формулировка идёт в description
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
     source: str = "manual"

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmtDate } from "@/lib/api";
+import { copyToClipboard, taskAsPrompt } from "@/lib/taskPrompt";
 import type { Job, PlanStep, Task, TaskStatus } from "@/lib/types";
 
 type TaskDetail = {
@@ -38,12 +39,25 @@ const RELATION_LABEL: Record<string, string> = {
   overlaps: "пересекается",
 };
 
+/** Подпись для карточки на доске. Длинное ТЗ целиком живёт в description —
+ *  title остаётся коротким, иначе колонка канбана превращается в простыню. */
+function shortTitle(text: string): string {
+  const first = text.split("\n").find((l) => l.trim()) ?? text;
+  const line = first.trim();
+  if (line.length <= 120) return line.slice(0, 300);
+  const cut = line.slice(0, 120);
+  const space = cut.lastIndexOf(" ");
+  return (space > 40 ? cut.slice(0, space) : cut) + "…";
+}
+
 export default function KanbanTab({
   projectId,
+  projectName,
   refreshTick,
   jobs = [],
 }: {
   projectId: string;
+  projectName?: string;
   refreshTick: number;
   jobs?: Job[];
 }) {
@@ -64,7 +78,7 @@ export default function KanbanTab({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [newTitle, setNewTitle] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
@@ -77,15 +91,20 @@ export default function KanbanTab({
     load();
   }, [load, refreshTick]);
 
-  async function createTask(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
+  async function createTask(text: string, enrich: boolean) {
+    // Короткий однострочный ввод ведёт себя как раньше; длинное ТЗ целиком
+    // уходит в description, а на карточке остаётся усечённый заголовок.
+    const title = shortTitle(text);
     await api(`/projects/${projectId}/tasks`, {
       method: "POST",
-      body: JSON.stringify({ title: newTitle.trim(), enrich: true }),
+      body: JSON.stringify({ title, description: title === text ? "" : text, enrich }),
     });
-    setNewTitle("");
-    setNotice("Задача создана и отправлена на RLM-проработку — описание и план появятся через минуту-две.");
+    setShowCreate(false);
+    setNotice(
+      enrich
+        ? "Задача создана и отправлена на RLM-проработку — описание и план появятся через минуту-две."
+        : "Задача добавлена."
+    );
     load();
   }
 
@@ -115,11 +134,15 @@ export default function KanbanTab({
   async function runEnrichAll() {
     setNotice("");
     try {
-      await api(`/projects/${projectId}/tasks/enrich`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      setNotice("RLM-проработка всех новых задач запущена: исследование кодовой базы → детальные описания и планы со ссылками на файлы.");
+      const r = await api<{ job_id: string | null; tasks: number }>(
+        `/projects/${projectId}/tasks/enrich`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      setNotice(
+        r.tasks === 0
+          ? "Непроработанных задач нет — все открытые карточки уже разобраны RLM."
+          : `RLM-проработка запущена, задач: ${r.tasks}. Исследование кодовой базы → описания и планы со ссылками на файлы.`
+      );
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Ошибка");
     }
@@ -129,16 +152,7 @@ export default function KanbanTab({
 
   return (
     <div className="space-y-3 h-full flex flex-col">
-      <div className="flex gap-2 items-center flex-wrap">
-        <form onSubmit={createTask} className="flex gap-2 flex-1 min-w-64">
-          <input
-            className="input"
-            placeholder="Короткая задача — ИИ сам проработает её по кодовой базе…"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-          />
-          <button className="btn whitespace-nowrap">+ С проработкой</button>
-        </form>
+      <div className="flex gap-2 items-center flex-wrap justify-end">
         <button className="btn btn-ghost" onClick={runEnrichAll} title="RLM-исследование кодовой базы для всех непроработанных задач">
           🧠 Проработать новые (RLM)
         </button>
@@ -217,17 +231,32 @@ export default function KanbanTab({
                   </div>
                 );
               })}
-              {colTasks.length === 0 && (
+              {colTasks.length === 0 && col.key !== "planned" && (
                 <div className="text-xs text-[var(--muted)] text-center py-4">Пусто</div>
+              )}
+              {/* Постановка задачи живёт здесь, а не в шапке: длинный текст
+                  разъезжался бы вместе с остальными кнопками доски. */}
+              {col.key === "planned" && (
+                <button
+                  className="w-full text-sm text-[var(--muted)] hover:text-[var(--accent)] border border-dashed border-[var(--border)] hover:border-[var(--accent)] rounded-lg py-2"
+                  onClick={() => setShowCreate(true)}
+                >
+                  + Задача
+                </button>
               )}
             </div>
           );
         })}
       </div>
 
+      {showCreate && (
+        <CreateTaskModal onClose={() => setShowCreate(false)} onCreate={createTask} />
+      )}
+
       {selected && (
         <TaskModal
           projectId={projectId}
+          projectName={projectName}
           task={selected}
           allTasks={tasks}
           onOpenTask={(id) => setSelectedId(id)}
@@ -242,8 +271,83 @@ export default function KanbanTab({
   );
 }
 
+/** Постановка задачи: полноценный textarea без ограничения по длине.
+ *  «Добавить» кладёт карточку как есть, «с проработкой» сразу отправляет её
+ *  в RLM — исследование кодовой базы, описание со ссылками на файлы и план. */
+function CreateTaskModal({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (text: string, enrich: boolean) => Promise<void>;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  async function submit(enrich: boolean) {
+    const value = text.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate(value, enrich);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="card w-full max-w-2xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="font-medium text-lg">Новая задача</div>
+        <textarea
+          ref={ref}
+          className="input min-h-48 text-sm leading-relaxed"
+          placeholder={
+            "Задача своими словами — можно абзацем, длина не ограничена.\n\n" +
+            "Не нужно искать файлы и формулировать инженерно: с проработкой ИИ сам " +
+            "исследует кодовую базу и превратит это в описание со ссылками на файлы, " +
+            "планом и развилками, которые стоит решить до начала."
+          }
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              submit(true);
+            }
+          }}
+        />
+        {error && <div className="text-sm text-red-400">{error}</div>}
+        <div className="flex justify-end gap-2 items-center">
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Отмена</button>
+          <button className="btn btn-ghost" onClick={() => submit(false)} disabled={busy || !text.trim()}>
+            Добавить
+          </button>
+          <button
+            className="btn"
+            onClick={() => submit(true)}
+            disabled={busy || !text.trim()}
+            title="Ctrl+Enter"
+          >
+            {busy ? "Создаю…" : "🧠 Добавить с проработкой"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskModal({
   projectId,
+  projectName,
   task,
   allTasks,
   onOpenTask,
@@ -251,6 +355,7 @@ function TaskModal({
   onChanged,
 }: {
   projectId: string;
+  projectName?: string;
   task: Task;
   allTasks: Task[];
   onOpenTask: (id: string) => void;
@@ -264,6 +369,7 @@ function TaskModal({
   const [enriching, setEnriching] = useState(false);
   const [info, setInfo] = useState("");
   const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const byId = (id: string) => allTasks.find((t) => t.id === id);
   const deps = (task.extra?.depends_on ?? []).map(byId).filter((t): t is Task => !!t);
@@ -336,6 +442,15 @@ function TaskModal({
     onChanged();
   }
 
+  async function copyPrompt() {
+    const ok = await copyToClipboard(taskAsPrompt(task, projectName));
+    setInfo(
+      ok
+        ? "Задача скопирована: описание, шаги, развилки, что заденет и файлы — можно вставлять в Claude Code."
+        : "Не удалось скопировать — браузер отказал в доступе к буферу обмена."
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="card w-full max-w-2xl p-5 space-y-3 max-h-[88vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
@@ -358,6 +473,40 @@ function TaskModal({
               🗂 {task.extra?.planned ? "Перепланировать" : "Декомпозировать"}
             </button>
           )}
+          <div className="relative">
+            <button
+              className="btn btn-ghost px-2.5"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="Ещё"
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-[55]" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-[56] card p-1 w-56 shadow-xl">
+                  <button
+                    className="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      copyPrompt();
+                    }}
+                  >
+                    📋 Скопировать задачу
+                  </button>
+                  <button
+                    className="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-[var(--surface-2)] text-red-300"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      remove();
+                    }}
+                  >
+                    Удалить задачу
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {info && <div className="text-sm text-[var(--accent)]">{info}</div>}
@@ -584,16 +733,13 @@ function TaskModal({
             </div>
           </div>
         ) : (
-          <div className="flex gap-2 justify-between">
-            <button className="btn btn-ghost text-red-300" onClick={remove}>Удалить</button>
-            <div className="flex gap-2">
-              {task.status !== "done" && (
-                <button className="btn btn-ghost" onClick={() => setShowDone(true)}>
-                  Пометить выполненной…
-                </button>
-              )}
-              <button className="btn" onClick={save}>Сохранить</button>
-            </div>
+          <div className="flex gap-2 justify-end">
+            {task.status !== "done" && (
+              <button className="btn btn-ghost" onClick={() => setShowDone(true)}>
+                Пометить выполненной…
+              </button>
+            )}
+            <button className="btn" onClick={save}>Сохранить</button>
           </div>
         )}
       </div>

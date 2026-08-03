@@ -16,6 +16,7 @@ from .prompts import (
     TASK_PLAN_INVESTIGATION_QUESTION,
     TASK_PLAN_PROMPT,
     TASK_PLAN_SYSTEM,
+    TASK_TEXT_LIMIT,
 )
 from .task_enrich import list_existing_tasks_text
 
@@ -45,7 +46,9 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
     # 1. RLM-исследование: из каких частей состоит работа и в каком порядке
     await runner.report(job_id, 0.1, f"Планировщик: исследование «{task.title[:60]}»")
     question = TASK_PLAN_INVESTIGATION_QUESTION.format(
-        title=task.title, description=(task.description or "")[:2000], decisions=decisions
+        title=task.title,
+        description=(task.description or "")[:TASK_TEXT_LIMIT],
+        decisions=decisions,
     )
     try:
         investigation = await rlm.answer(project, question)
@@ -62,7 +65,7 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
     prompt = TASK_PLAN_PROMPT.format(
         project_name=project.name,
         title=task.title,
-        description=(task.description or "(без описания)")[:2000],
+        description=(task.description or "(без описания)")[:TASK_TEXT_LIMIT],
         project_context=context,
         decisions=decisions,
         investigation=investigation_text[:20000],

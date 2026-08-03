@@ -169,7 +169,12 @@ export default function ProjectPage() {
           <OverviewTab project={project} jobs={jobs} onAction={load} />
         )}
         {tab === "kanban" && (
-          <KanbanTab projectId={project.id} refreshTick={refreshTick} jobs={jobs} />
+          <KanbanTab
+            projectId={project.id}
+            projectName={project.name}
+            refreshTick={refreshTick}
+            jobs={jobs}
+          />
         )}
         {tab === "chat" && <ChatTab projectId={project.id} />}
         {tab === "files" && <FilesTab projectId={project.id} />}
