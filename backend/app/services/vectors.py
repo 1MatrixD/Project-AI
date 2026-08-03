@@ -199,6 +199,53 @@ async def delete(
         log.warning("Qdrant-удаление не удалось: %s", e)
 
 
+async def clone(old_project_id: str, new_project_id: str) -> int:
+    """Скопировать все точки проекта под новый project_id.
+
+    Вектора переносятся как есть — эмбеддинги не пересчитываются (это и есть
+    смысл дублирования: не платить второй раз за уже сделанную работу).
+    Точки копии получают свои id, поэтому удаление оригинала их не заденет.
+    """
+    copied = 0
+    try:
+        client = get_client()
+        name = get_settings().qdrant_collection
+        if not await client.collection_exists(name):
+            return 0
+        offset = None
+        while True:
+            points, offset = await client.scroll(
+                name,
+                scroll_filter=_filter(old_project_id),
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,
+            )
+            if not points:
+                break
+            new_points = []
+            for p in points:
+                payload = dict(p.payload or {})
+                payload["project_id"] = new_project_id
+                new_points.append(
+                    models.PointStruct(
+                        id=_point_id(
+                            new_project_id, str(payload.get("kind", "")), str(payload.get("key", ""))
+                        ),
+                        vector=p.vector,
+                        payload=payload,
+                    )
+                )
+            await client.upsert(name, points=new_points)
+            copied += len(new_points)
+            if offset is None:
+                break
+    except Exception as e:
+        log.warning("Qdrant-клонирование не удалось (скопировано %d): %s", copied, e)
+    return copied
+
+
 async def search(
     project_id: str,
     query: str,

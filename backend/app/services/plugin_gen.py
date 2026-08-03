@@ -26,6 +26,12 @@ def slugify(name: str) -> str:
     return slug.translate(table)[:60]
 
 
+def plugin_slug(project: Project) -> str:
+    """Каталог плагина ключуется по имени, а не по id — значит, у двух проектов
+    с одинаковым именем он общий. Дубль обязан получить другое имя."""
+    return f"projectai-{slugify(project.name)}"
+
+
 def _mcp_server_config(project: Project, token: str, surface: str = "plugin") -> dict:
     s = get_settings()
     return {
@@ -82,7 +88,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     MCP-сервер + скиллы из карты знаний. Возвращает путь плагина."""
     project, token = await _get_service_token(project_id)
     s = get_settings()
-    slug = f"projectai-{slugify(project.name)}"
+    slug = plugin_slug(project)
     plugin_dir = s.data_path / "plugins" / slug
     (plugin_dir / ".claude-plugin").mkdir(parents=True, exist_ok=True)
 
@@ -250,6 +256,24 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     return str(plugin_dir)
 
 
+def remove_project_artifacts(project: Project) -> None:
+    """Снести файлы проекта, лежащие вне его каталога: сгенерированный плагин и
+    mcp-конфиг чата. Без этого удалённый проект остаётся в marketplace.json и
+    его плагин можно поставить в Claude Code уже после удаления."""
+    import shutil
+
+    s = get_settings()
+    shutil.rmtree(s.data_path / "plugins" / plugin_slug(project), ignore_errors=True)
+    try:
+        (s.data_path / "mcp" / f"{project.id}.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        _refresh_marketplace()
+    except OSError:
+        pass
+
+
 def _refresh_marketplace() -> None:
     """Каталог-маркетплейс со всеми плагинами проектов: добавляется в claude один раз."""
     s = get_settings()
@@ -336,7 +360,7 @@ def _read_skill_meta(skill_dir: Path) -> dict | None:
 
 def plugin_install_info(project: Project) -> dict:
     s = get_settings()
-    slug = f"projectai-{slugify(project.name)}"
+    slug = plugin_slug(project)
     plugin_dir = s.data_path / "plugins" / slug
     marketplace_dir = s.data_path / "plugins"
     skills = []
@@ -355,6 +379,96 @@ def plugin_install_info(project: Project) -> dict:
             f"claude plugin marketplace add {marketplace_dir}",
             f"claude plugin install {slug}@projectai",
         ],
+        "local_settings_path": str(local_settings_path(project)),
+        "local_settings": local_settings_snippet(project),
+        "installed_locally": _has_local_install(project),
         "skills": skills,
         "mcp_tools": MCP_TOOLS_INFO,
     }
+
+
+# --- установка «только в этот проект» ---------------------------------------
+#
+# `claude plugin install` пишет в ~/.claude/settings.json, то есть плагин
+# становится виден во всех сессиях Claude Code на машине. Те же два ключа
+# понимает и `<проект>/.claude/settings.local.json`, а настройки разных уровней
+# складываются — поэтому плагин можно включить ровно там, где он нужен.
+# Файл именно `.local`, а не общий: в нём абсолютный путь к каталогу плагинов
+# конкретной машины, коммитить такое в репозиторий нельзя.
+
+
+def local_settings_path(project: Project) -> Path:
+    return Path(project.root_path) / ".claude" / "settings.local.json"
+
+
+def local_settings_snippet(project: Project) -> dict:
+    marketplace_dir = get_settings().data_path / "plugins"
+    return {
+        "extraKnownMarketplaces": {
+            "projectai": {"source": {"source": "directory", "path": str(marketplace_dir)}}
+        },
+        "enabledPlugins": {f"{plugin_slug(project)}@projectai": True},
+    }
+
+
+def _has_local_install(project: Project) -> bool:
+    path = local_settings_path(project)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool((data.get("enabledPlugins") or {}).get(f"{plugin_slug(project)}@projectai"))
+
+
+def install_locally(project: Project) -> dict:
+    """Включить плагин в `<проект>/.claude/settings.local.json`.
+
+    Чужие ключи в файле не трогаем — только доливаем свои: там могут лежать
+    разрешения и хуки, настроенные пользователем.
+    """
+    path = local_settings_path(project)
+    data: dict = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{path} — не читается как JSON: {e}")
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} — ожидался объект JSON")
+
+    snippet = local_settings_snippet(project)
+    markets = dict(data.get("extraKnownMarketplaces") or {})
+    markets.update(snippet["extraKnownMarketplaces"])
+    data["extraKnownMarketplaces"] = markets
+    enabled = dict(data.get("enabledPlugins") or {})
+    enabled.update(snippet["enabledPlugins"])
+    data["enabledPlugins"] = enabled
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(path), "plugin": f"{plugin_slug(project)}@projectai"}
+
+
+def uninstall_locally(project: Project) -> dict:
+    """Убрать плагин из настроек проекта, не трогая остальные ключи."""
+    path = local_settings_path(project)
+    if not path.is_file():
+        return {"path": str(path), "removed": False}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{path} — не читается как JSON: {e}")
+
+    key = f"{plugin_slug(project)}@projectai"
+    removed = bool((data.get("enabledPlugins") or {}).pop(key, None))
+    if not data.get("enabledPlugins"):
+        data.pop("enabledPlugins", None)
+    # маркетплейс общий для всех проектов — убираем, только если больше некого включать
+    if not data.get("enabledPlugins"):
+        (data.get("extraKnownMarketplaces") or {}).pop("projectai", None)
+        if not data.get("extraKnownMarketplaces"):
+            data.pop("extraKnownMarketplaces", None)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(path), "removed": removed}

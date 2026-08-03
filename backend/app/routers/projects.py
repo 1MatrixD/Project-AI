@@ -25,7 +25,7 @@ from ..schemas import (
     ProjectUpdate,
 )
 from ..security import create_service_token
-from ..services import graphdb, plugin_gen, rlm, vectors
+from ..services import graphdb, plugin_gen, project_copy, rlm, vectors
 
 log = logging.getLogger("projectai.api.projects")
 
@@ -108,15 +108,43 @@ async def update_project(
 async def delete_project(
     project: Project = Depends(get_project), session: AsyncSession = Depends(get_session)
 ) -> None:
+    """Удаляет проект целиком: граф, вектора, строку в БД (каскадом — задачи,
+    чаты, материалы, worklog) и файлы на диске. Каталог с кодом не трогает."""
+    from ..services.watcher import watcher
+
+    # первым делом снимаем наблюдение: иначе watcher продолжит слать индексацию
+    # по уже удалённому проекту
+    watcher.stop_watch(project.id)
     await graphdb.delete_project_graph(str(project.id))
     await vectors.delete(str(project.id))
     await session.execute(delete(Project).where(Project.id == project.id))
     await session.commit()
-    s = get_settings()
-    for sub in ("materials", "mcp"):
-        p = s.data_path / sub / str(project.id)
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
+    shutil.rmtree(get_settings().data_path / "materials" / str(project.id), ignore_errors=True)
+    plugin_gen.remove_project_artifacts(project)
+
+
+@router.post("/{project_id}/duplicate", response_model=ProjectOut, status_code=201)
+async def duplicate_project_endpoint(
+    body: dict | None = None,
+    project: Project = Depends(get_project),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectOut:
+    """Копия проекта со всей картой знаний — чтобы экспериментировать, не ожидая
+    и не оплачивая повторный ИИ-анализ файлов.
+
+    Копия независима: свои строки в БД, свой подграф Neo4j, свои точки Qdrant,
+    свой сервисный токен. Удаление оригинала её не заденет. Каталог с кодом
+    остаётся общим, наблюдение за ним у копии выключено.
+    """
+    if await runner.has_active(project.id, INDEX_JOB_TYPES):
+        raise HTTPException(
+            status_code=409, detail="Идёт индексация — дубль получился бы половинчатым"
+        )
+    copy = await project_copy.duplicate_project(
+        session, project, user.id, str((body or {}).get("name") or "")
+    )
+    return ProjectOut.model_validate(copy)
 
 
 @router.post("/{project_id}/index")
@@ -514,3 +542,23 @@ async def plugin_file(path: str, project: Project = Depends(get_project)) -> dic
 async def plugin_regenerate(project: Project = Depends(get_project)) -> dict:
     job = await runner.submit(project.id, "plugin_generate", {})
     return {"job_id": str(job.id)}
+
+
+@router.post("/{project_id}/plugin/local")
+async def plugin_install_local(project: Project = Depends(get_project)) -> dict:
+    """Включить плагин только в этом проекте — через
+    `<каталог проекта>/.claude/settings.local.json`, а не глобально в ~/.claude."""
+    if not Path(project.root_path).is_dir():
+        raise HTTPException(status_code=400, detail=f"Каталог проекта не найден: {project.root_path}")
+    try:
+        return plugin_gen.install_locally(project)
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{project_id}/plugin/local")
+async def plugin_uninstall_local(project: Project = Depends(get_project)) -> dict:
+    try:
+        return plugin_gen.uninstall_locally(project)
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=str(e))

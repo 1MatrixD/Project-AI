@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from neo4j import AsyncGraphDatabase
@@ -660,6 +661,122 @@ async def get_stats(project_id: str) -> dict:
 async def delete_project_graph(project_id: str) -> None:
     async with get_driver().session() as s:
         await s.run("MATCH (n) WHERE n.project_id = $pid DETACH DELETE n", pid=project_id)
+
+
+async def delete_task_nodes(project_id: str) -> None:
+    """Убрать узлы задач проекта. Нужно при дублировании: клон графа приносит
+    Task-узлы со старыми id внутри uid, а задачи-копии получают новые."""
+    async with get_driver().session() as s:
+        await s.run(
+            "MATCH (t:Task) WHERE t.project_id = $pid DETACH DELETE t",
+            pid=project_id,
+        )
+
+
+#: лейблы и типы связей подставляются в Cypher текстом (параметризовать их нельзя),
+#: поэтому берём только то, что пришло из самой базы и выглядит как идентификатор
+_SAFE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+#: сколько узлов/связей уезжает в Neo4j одним запросом при клонировании
+_CLONE_BATCH = 500
+
+
+def _labels_literal(labels: list[str]) -> str | None:
+    """`:File:Something` для подстановки в Cypher — или None, если лейбл выглядит
+    подозрительно (параметризовать лейблы Cypher не умеет, поэтому подставляем
+    текстом только то, что похоже на идентификатор)."""
+    if not labels or not all(_SAFE_NAME.match(x) for x in labels):
+        return None
+    return "".join(f":{x}" for x in labels)
+
+
+async def clone_project_graph(old_pid: str, new_pid: str) -> dict:
+    """Полная копия подграфа проекта под новым project_id.
+
+    Копия физически независима: свои узлы со своими uid, поэтому удаление
+    оригинала (DETACH DELETE по его project_id) её не задевает.
+
+    Свойства правятся на стороне Python и уезжают готовым списком: если сделать
+    `SET c = properties(n)` и поправить uid следующим выражением, узел на миг
+    получает uid оригинала и падает на констрейнте уникальности.
+    """
+    created_nodes = 0
+    created_rels = 0
+    skipped: list[str] = []
+    cut = len(old_pid)
+
+    def rename(uid_value: str) -> str:
+        return new_pid + uid_value[cut:]
+
+    async with get_driver().session() as s:
+        # --- узлы: группируем по набору лейблов, лейблы в запрос идут текстом ---
+        res = await s.run(
+            "MATCH (n) WHERE n.project_id = $old AND n.uid IS NOT NULL "
+            "RETURN labels(n) AS ls, properties(n) AS props",
+            old=old_pid,
+        )
+        node_groups: dict[tuple[str, ...], list[dict]] = {}
+        async for rec in res:
+            props = dict(rec["props"])
+            props["uid"] = rename(str(props["uid"]))
+            props["project_id"] = new_pid
+            node_groups.setdefault(tuple(rec["ls"]), []).append(props)
+
+        for labels, rows in node_groups.items():
+            lit = _labels_literal(list(labels))
+            if lit is None:
+                skipped.append(f"labels={list(labels)}")
+                continue
+            for i in range(0, len(rows), _CLONE_BATCH):
+                await s.run(
+                    f"UNWIND $rows AS p CREATE (c{lit}) SET c = p",
+                    rows=rows[i : i + _CLONE_BATCH],
+                )
+                created_nodes += len(rows[i : i + _CLONE_BATCH])
+
+        # --- связи: группируем по (тип, лейблы концов), чтобы искать по индексу ---
+        res = await s.run(
+            "MATCH (a)-[r]->(b) "
+            "WHERE a.project_id = $old AND b.project_id = $old "
+            "  AND a.uid IS NOT NULL AND b.uid IS NOT NULL "
+            "RETURN type(r) AS t, labels(a) AS la, labels(b) AS lb, "
+            "       a.uid AS auid, b.uid AS buid, properties(r) AS props",
+            old=old_pid,
+        )
+        rel_groups: dict[tuple, list[dict]] = {}
+        async for rec in res:
+            key = (rec["t"], tuple(rec["la"]), tuple(rec["lb"]))
+            rel_groups.setdefault(key, []).append(
+                {
+                    "a": rename(str(rec["auid"])),
+                    "b": rename(str(rec["buid"])),
+                    "props": dict(rec["props"]),
+                }
+            )
+
+        for (rel_type, la, lb), rows in rel_groups.items():
+            lit_a, lit_b = _labels_literal(list(la)), _labels_literal(list(lb))
+            if lit_a is None or lit_b is None or not _SAFE_NAME.match(rel_type):
+                skipped.append(f"rel={rel_type}")
+                continue
+            for i in range(0, len(rows), _CLONE_BATCH):
+                chunk = rows[i : i + _CLONE_BATCH]
+                rec = await (
+                    await s.run(
+                        "UNWIND $rows AS pair "
+                        f"MATCH (a2{lit_a} {{uid: pair.a}}) "
+                        f"MATCH (b2{lit_b} {{uid: pair.b}}) "
+                        f"CREATE (a2)-[r2:{rel_type}]->(b2) SET r2 = pair.props "
+                        "RETURN count(r2) AS n",
+                        rows=chunk,
+                    )
+                ).single()
+                created_rels += rec["n"] if rec else 0
+
+    if skipped:
+        log.warning("Клонирование графа: пропущено %s", ", ".join(skipped))
+    return {"nodes": created_nodes, "relationships": created_rels, "skipped": skipped}
 
 
 async def delete_path_prefix(project_id: str, alias: str) -> None:
