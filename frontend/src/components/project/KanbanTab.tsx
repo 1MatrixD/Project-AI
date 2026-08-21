@@ -364,6 +364,7 @@ function TaskModal({
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
+  const [notes, setNotes] = useState(task.extra?.notes ?? "");
   const [report, setReport] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [enriching, setEnriching] = useState(false);
@@ -378,7 +379,8 @@ function TaskModal({
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description);
-  }, [task.id, task.title, task.description]);
+    setNotes(task.extra?.notes ?? "");
+  }, [task.id, task.title, task.description, task.extra?.notes]);
 
   useEffect(() => {
     setDetail(null);
@@ -390,7 +392,7 @@ function TaskModal({
   async function save() {
     await api(`/projects/${projectId}/tasks/${task.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ title, description }),
+      body: JSON.stringify({ title, description, notes }),
     });
     onChanged();
   }
@@ -516,6 +518,14 @@ function TaskModal({
           </div>
         )}
 
+        {task.extra?.from_material && (
+          <div className="text-xs text-[var(--muted)]">
+            Из материала «{task.extra.from_material.filename}»
+            {(task.extra.updated_by_materials?.length ?? 0) > 0 &&
+              `, уточнена: ${task.extra.updated_by_materials!.map((m) => `«${m.filename}»`).join(", ")}`}
+          </div>
+        )}
+
         {task.extra?.duplicate_of && (
           <div className="text-sm text-amber-300">
             ⚠️ Возможный дубликат: «{task.extra.duplicate_of}»
@@ -546,6 +556,43 @@ function TaskModal({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+
+        {/* Прямая речь людей: проработка это читает и никогда не перезаписывает,
+            в отличие от описания, которое она пересобирает целиком. */}
+        <div className="space-y-1">
+          <div className="text-sm font-medium">
+            Мои заметки{" "}
+            <span className="text-xs font-normal text-[var(--muted)]">
+              — проработка учтёт и не сотрёт
+            </span>
+          </div>
+          <textarea
+            className="input min-h-20 text-sm leading-relaxed"
+            placeholder="Своими словами: что имелось в виду, детали, которых нет в описании. Сохраняется кнопкой ниже."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </div>
+
+        {(task.extra?.clarifications?.length ?? 0) > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Уточнения из материалов{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — пришли позже задачи
+              </span>
+            </div>
+            {task.extra!.clarifications!.map((c, i) => (
+              <div
+                key={i}
+                className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 space-y-1"
+              >
+                <div className="text-[10px] text-[var(--muted)] font-mono">{c.source}</div>
+                <div className="text-xs leading-relaxed whitespace-pre-wrap">{c.text}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {(task.extra?.reading || task.extra?.hypothesis?.text) && (
           <div className="space-y-1">

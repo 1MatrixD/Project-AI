@@ -107,6 +107,8 @@ async def update_task(
         task.description = data.description[:8000]
     if data.plan is not None:
         task.plan = normalize_plan(data.plan)
+    if data.notes is not None:
+        task.extra = {**(task.extra or {}), "notes": data.notes[:8000]}
     if data.status is not None:
         if data.status not in VALID_STATUSES:
             raise HTTPException(status_code=400, detail=f"Статус: {', '.join(sorted(VALID_STATUSES))}")

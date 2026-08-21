@@ -371,6 +371,33 @@ async def test_enrich_task_rlm(
     assert enriched["plan"] == []
 
 
+async def test_owner_notes_survive_enrichment(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Проработка пересобирает description целиком, поэтому вписанное руками
+    уточнение там не выживало. Заметки владельца живут отдельно: их читают,
+    но не перезаписывают."""
+    pid = project["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Задача с заметкой"})
+    task_id = r.json()["id"]
+    r = await user_client.patch(
+        f"/api/projects/{pid}/tasks/{task_id}",
+        json={"notes": "Своими словами: игроков девять, замены только в перерыве."},
+    )
+    assert r.status_code == 200, r.text
+    assert "девять" in r.json()["extra"]["notes"]
+
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{task_id}/enrich")
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["stats"]["enriched"] == 1, job["stats"]
+
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    task = next(t for t in r.json() if t["id"] == task_id)
+    assert "девять" in task["extra"]["notes"], "заметка обязана пережить проработку"
+    assert task["extra"]["enriched"] is True
+    assert "Детальная проработка" in task["description"], "описание при этом пересобрано"
+
+
 async def test_enrich_retries_broken_json_synthesis(
     user_client: httpx.AsyncClient, project: dict, monkeypatch, tmp_path: Path
 ) -> None:

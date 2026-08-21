@@ -181,6 +181,9 @@ class TaskUpdateIn(BaseModel):
     description: str | None = None
     status: str | None = None
     plan: list | None = None
+    #: заметки владельца задачи. Живут отдельно от description, потому что
+    #: описание проработка пересобирает целиком — вписанное руками там не выживало
+    notes: str | None = None
 
 
 class TaskDoneIn(BaseModel):
@@ -251,6 +254,15 @@ class DecisionOut(ORMModel):
 
 # --- materials ---
 
+class NoteIn(BaseModel):
+    """Заметка своими словами — материал, набранный руками."""
+
+    title: str = ""
+    text: str = Field(min_length=1)
+    #: id материала, который эта заметка уточняет
+    clarifies: uuid.UUID | None = None
+
+
 class MaterialOut(ORMModel):
     id: uuid.UUID
     filename: str
@@ -259,6 +271,8 @@ class MaterialOut(ORMModel):
     status: str
     summary: str | None
     error: str | None
+    #: meta.clarifies — id материала, который этот уточняет
+    meta: dict = {}
     created_at: datetime
     processed_at: datetime | None
 

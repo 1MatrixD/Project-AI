@@ -12,7 +12,7 @@ from ..db import get_session
 from ..deps import get_project
 from ..jobs_runner import runner
 from ..models import Material, Project
-from ..schemas import MaterialOut
+from ..schemas import MaterialOut, NoteIn
 
 router = APIRouter(prefix="/projects/{project_id}/materials", tags=["materials"])
 
@@ -50,13 +50,30 @@ async def list_materials(
     return [MaterialOut.model_validate(m) for m in res.scalars()]
 
 
+async def _check_clarifies(
+    session: AsyncSession, project: Project, clarifies: uuid.UUID | None
+) -> dict:
+    """meta для материала-уточнения. Ссылка проверяется здесь, иначе битый id
+    всплывёт только в фоне, когда извлечение задач уже пойдёт без контекста."""
+    if clarifies is None:
+        return {}
+    parent = await session.get(Material, clarifies)
+    if parent is None or parent.project_id != project.id:
+        raise HTTPException(status_code=400, detail="Материал для уточнения не найден")
+    return {"clarifies": str(clarifies)}
+
+
 @router.post("", response_model=MaterialOut, status_code=201)
 async def upload_material(
     file: UploadFile,
     project: Project = Depends(get_project),
     session: AsyncSession = Depends(get_session),
     extract_tasks: bool = True,
+    clarifies: uuid.UUID | None = None,
 ) -> MaterialOut:
+    """clarifies — id более раннего материала, который этот уточняет: созвон дал
+    скелет задач, ТЗ или заметка дают логику. Тогда извлечение получает задачи
+    того материала целиком и дополняет их, а не заводит дубликаты."""
     s = get_settings()
     filename = sanitize_filename(file.filename)
     material = Material(
@@ -64,6 +81,7 @@ async def upload_material(
         filename=filename,
         stored_path="",
         media_type=file.content_type or "application/octet-stream",
+        meta=await _check_clarifies(session, project, clarifies),
     )
     session.add(material)
     await session.flush()
@@ -91,6 +109,47 @@ async def upload_material(
         project.id,
         "process_material",
         {"material_id": str(material.id), "extract_tasks": extract_tasks},
+    )
+    return MaterialOut.model_validate(material)
+
+
+@router.post("/note", response_model=MaterialOut, status_code=201)
+async def add_note(
+    data: NoteIn,
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> MaterialOut:
+    """Заметка своими словами — такой же материал, только текст набран, а не
+    загружен. Идёт тем же пайплайном: тоже умеет уточнять уже заведённые задачи
+    и заводить новые. Отдельной механики под неё нет намеренно."""
+    s = get_settings()
+    title = (data.title.strip() or "Заметка")[:200]
+    filename = sanitize_filename(f"{title}.txt")
+    material = Material(
+        project_id=project.id,
+        filename=filename,
+        stored_path="",
+        media_type="text/plain",
+        meta=await _check_clarifies(session, project, data.clarifies),
+    )
+    session.add(material)
+    await session.flush()
+
+    d = s.data_path / "materials" / str(project.id)
+    d.mkdir(parents=True, exist_ok=True)
+    stored = d / f"{material.id}_{filename}"
+    text = data.text.strip()
+    async with aiofiles.open(stored, "w", encoding="utf-8") as out:
+        await out.write(text)
+    material.stored_path = str(stored)
+    material.size = len(text.encode("utf-8"))
+    await session.commit()
+    await session.refresh(material)
+
+    await runner.submit(
+        project.id,
+        "process_material",
+        {"material_id": str(material.id), "extract_tasks": True},
     )
     return MaterialOut.model_validate(material)
 

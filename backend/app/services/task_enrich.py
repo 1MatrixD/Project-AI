@@ -56,6 +56,32 @@ async def list_existing_tasks_text(project_id: uuid.UUID, exclude: uuid.UUID | N
     return "\n".join(lines) or "(задач ещё нет)"
 
 
+def human_input_block(task: TaskItem) -> str:
+    """Прямая речь людей по задаче: заметки владельца и уточнения из материалов.
+
+    Живёт в extra, а не в description, потому что описание проработка пересобирает
+    целиком — вписанное руками там не выживало. Здесь же оно переживает любое
+    число проработок и каждый раз идёт в промпт.
+    """
+    extra = task.extra or {}
+    lines: list[str] = []
+    notes = str(extra.get("notes") or "").strip()
+    if notes:
+        lines.append(f"[заметка владельца] {notes[:TASK_TEXT_LIMIT]}")
+    for c in (extra.get("clarifications") or [])[:20]:
+        text = str((c or {}).get("text") or "").strip()
+        if text:
+            source = str((c or {}).get("source") or "материал")
+            lines.append(f"[уточнение из «{source}»] {text[:TASK_TEXT_LIMIT]}")
+    if not lines:
+        return ""
+    body = "\n".join(lines)
+    return (
+        "\nЗаметки владельца и уточнения из материалов — прямая речь людей,"
+        " которые знают продукт:\n" + body + "\n"
+    )
+
+
 async def enrich_one(
     project: Project, task: TaskItem, on_progress: rlm.StageCb | None = None
 ) -> dict:
@@ -73,10 +99,13 @@ async def enrich_one(
 
     decisions = await get_decisions_text(project.id)
 
+    notes_block = human_input_block(task)
+
     # 1. RLM-исследование кодовой базы по задаче (самая долгая фаза — до 60%)
     question = TASK_ENRICH_INVESTIGATION_QUESTION.format(
         title=task.title,
         description=(task.description or "")[:TASK_TEXT_LIMIT],
+        notes_block=notes_block,
         decisions=decisions,
     )
 
@@ -109,6 +138,7 @@ async def enrich_one(
             project_name=project.name,
             title=task.title,
             description=(task.description or "(без описания)")[:TASK_TEXT_LIMIT],
+            notes_block=notes_block,
             project_context=context,
             decisions=decisions,
             investigation=facts[:20000],

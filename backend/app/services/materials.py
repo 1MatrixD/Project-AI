@@ -35,10 +35,41 @@ async def _next_task_order(session, project_id: uuid.UUID, status: str) -> float
     return (mx or 0.0) + 1.0
 
 
+async def clarified_tasks_text(project_id: uuid.UUID, material_id: uuid.UUID) -> str:
+    """Задачи, рождённые указанным материалом, — с ПОЛНЫМ описанием.
+
+    Обычный список существующих задач даёт по 120 символов описания: этого хватает,
+    чтобы не задвоить, но не хватает, чтобы решить «дополнить или завести новую».
+    Материал-уточнение целится именно в эти задачи, поэтому их показываем целиком.
+    """
+    async with get_sessionmaker()() as session:
+        res = await session.execute(
+            select(TaskItem)
+            .where(TaskItem.project_id == project_id)
+            .order_by(TaskItem.created_at)
+            .limit(200)
+        )
+        rows = [
+            t
+            for t in res.scalars()
+            if str(((t.extra or {}).get("from_material") or {}).get("id", "")) == str(material_id)
+        ]
+    if not rows:
+        return ""
+    blocks = [
+        f"### {t.title}\n{(t.description or '(без описания)')[:4000]}" for t in rows
+    ]
+    return "\n\n".join(blocks)
+
+
 async def extract_tasks_from_text(
-    project: Project, title: str, source_kind: str, text: str
+    project: Project,
+    title: str,
+    source_kind: str,
+    text: str,
+    clarifies_text: str = "",
 ) -> dict:
-    """ИИ-выжимка материала: summary + задачи. Возвращает {'summary', 'tasks': [...]}."""
+    """ИИ-выжимка материала: summary + новые задачи + дополнения к существующим."""
     from .decisions import get_decisions_text
     from .task_enrich import list_existing_tasks_text
 
@@ -46,12 +77,20 @@ async def extract_tasks_from_text(
     context = await graphdb.get_project_summary_context(str(project.id), 3000)
     existing = await list_existing_tasks_text(project.id)
     decisions = await get_decisions_text(project.id)
+    clarifies_block = (
+        "\nЭтот материал загружен как уточнение к более раннему. Задачи, которые\n"
+        "родились из того материала, приведены полностью — скорее всего дополнять\n"
+        "нужно именно их:\n" + clarifies_text + "\n"
+        if clarifies_text
+        else ""
+    )
     prompt = TASK_EXTRACTION_PROMPT.format(
         project_name=project.name,
         source_kind=source_kind,
         title=title,
         project_context=context or "(проект ещё не проиндексирован)",
         existing_tasks=existing,
+        clarifies_block=clarifies_block,
         decisions=decisions,
         text=text[:MAX_TEXT_FOR_AI],
     )
@@ -67,6 +106,49 @@ async def extract_tasks_from_text(
     if not isinstance(obj, dict):
         raise claude_cli.ClaudeError("Ожидался JSON-объект с summary/tasks")
     return obj
+
+
+async def _apply_task_updates(
+    project_id: uuid.UUID, updates: list, origin: dict
+) -> list[str]:
+    """Дополнения из материала → в существующие задачи.
+
+    Задача ищется по дословному совпадению названия (так требует промпт).
+
+    Дополнение кладётся в extra.clarifications, а не дописывается в description:
+    описание проработка пересобирает целиком, и дописанный туда текст она бы
+    затёрла — тем вернее, чем быстрее материал приходит следом за созвоном.
+    Уточнения живут рядом с заметками владельца, оба блока проработка читает и
+    никогда не перезаписывает. Флаг enriched снимается: досье собрано по старому
+    тексту, с новой логикой его надо пересобрать.
+    """
+    touched: list[str] = []
+    async with get_sessionmaker()() as session:
+        res = await session.execute(
+            select(TaskItem).where(TaskItem.project_id == project_id)
+        )
+        by_title = {t.title.strip().lower(): t for t in res.scalars()}
+        for u in updates[:40]:
+            if not isinstance(u, dict):
+                continue
+            title = str(u.get("task_title", "")).strip()
+            addition = str(u.get("add", "")).strip()
+            if not title or not addition:
+                continue
+            task = by_title.get(title.lower())
+            if task is None:
+                log.info("Дополнение не нашло задачу «%s» — пропускаю", title[:80])
+                continue
+            extra = dict(task.extra or {})
+            clarifications = list(extra.get("clarifications") or [])
+            clarifications.append({"text": addition[:8000], "source": origin["filename"]})
+            extra["clarifications"] = clarifications[-20:]
+            extra["enriched"] = False
+            extra["updated_by_materials"] = (extra.get("updated_by_materials") or []) + [origin]
+            task.extra = extra
+            touched.append(str(task.id))
+        await session.commit()
+    return touched
 
 
 async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
@@ -137,9 +219,18 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
             try:
                 from ..schemas import normalize_plan
 
-                parsed = await extract_tasks_from_text(project, material.filename, dtype, text)
+                clarifies_id = (material.meta or {}).get("clarifies")
+                clarifies_text = (
+                    await clarified_tasks_text(project_id, uuid.UUID(str(clarifies_id)))
+                    if clarifies_id
+                    else ""
+                )
+                parsed = await extract_tasks_from_text(
+                    project, material.filename, dtype, text, clarifies_text
+                )
                 summary = str(parsed.get("summary", ""))[:4000]
                 tasks = parsed.get("tasks") or []
+                origin = {"id": str(material_id), "filename": material.filename}
                 async with maker() as session:
                     for t in tasks:
                         if not isinstance(t, dict) or not t.get("title"):
@@ -153,6 +244,9 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                             source="meeting" if dtype == "transcript" else "doc",
                             order=order,
                             plan=normalize_plan(t.get("plan")),
+                            # откуда задача — по этой метке материал-уточнение
+                            # находит «те самые задачи с созвона»
+                            extra={"from_material": origin},
                         )
                         session.add(item)
                         await session.flush()
@@ -162,6 +256,12 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                         created_tasks += 1
                         created_ids.append(str(item.id))
                     await session.commit()
+                updated_ids = await _apply_task_updates(
+                    project_id, parsed.get("updates") or [], origin
+                )
+                if updated_ids:
+                    stats["tasks_updated"] = len(updated_ids)
+                    created_ids.extend(updated_ids)
                 # решения/договорённости с созвона → соглашения проекта
                 from .decisions import add_decision
 
@@ -182,8 +282,8 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                 stats["task_extraction_error"] = str(e)[:500]
 
         if created_ids:
-            # RLM-проработка новых задач: короткие формулировки с созвона →
-            # детальные задачи со ссылками на файлы
+            # RLM-проработка: и новые задачи, и дополненные материалом — у последних
+            # досье собрано по старому описанию и без новой логики уже неверно
             await runner.submit(project_id, "enrich_tasks", {"task_ids": created_ids})
             stats["enrich_job_submitted"] = True
 

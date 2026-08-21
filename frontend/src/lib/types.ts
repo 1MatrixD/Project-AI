@@ -84,6 +84,12 @@ export type TaskExtra = {
   files?: string[];
   related?: { title: string; relation: string; note: string }[];
   duplicate_of?: string | null;
+  // прямая речь людей: заметки владельца и уточнения из материалов. Живут
+  // отдельно от description, потому что его проработка пересобирает целиком
+  notes?: string;
+  clarifications?: { text: string; source: string }[];
+  from_material?: { id: string; filename: string };
+  updated_by_materials?: { id: string; filename: string }[];
   // досье: как понята задача, гипотеза, где смотреть, образец, как проверить
   reading?: string;
   hypothesis?: { text: string; confidence: string } | null;
@@ -124,6 +130,8 @@ export type Material = {
   status: "uploaded" | "processing" | "ready" | "error";
   summary: string | null;
   error: string | null;
+  //: meta.clarifies — id материала, который этот уточняет
+  meta?: { clarifies?: string };
   created_at: string;
 };
 

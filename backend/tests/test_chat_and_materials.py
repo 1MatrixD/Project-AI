@@ -70,6 +70,86 @@ async def test_chat_stream_and_persistence(user_client: httpx.AsyncClient, proje
     assert r.json()[0]["title"].startswith("Расскажи о проекте")
 
 
+async def test_clarifying_material_updates_existing_tasks(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Созвон даёт скелет задач, а ТЗ, пришедшее позже, — логику, без которой их
+    не сделать. Уточнение обязано доехать до уже заведённой задачи, а не потеряться
+    как дубликат и не задвоить доску."""
+    pid = project["id"]
+    r = await user_client.post(
+        f"/api/projects/{pid}/materials",
+        files={"file": ("call.txt", "Созвон про фичу А.".encode("utf-8"), "text/plain")},
+    )
+    call = r.json()
+    job = await latest_job(user_client, pid, "process_material")
+    await wait_job(user_client, pid, job["id"])
+
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    feature = next(t for t in r.json() if t["title"] == "Сделать фичу А")
+    assert feature["extra"]["from_material"]["id"] == call["id"], "задача помнит свой материал"
+
+    # ТЗ загружается как уточнение к созвону
+    r = await user_client.post(
+        f"/api/projects/{pid}/materials?clarifies={call['id']}",
+        files={"file": ("tz.txt", "Логика девяти игроков.".encode("utf-8"), "text/plain")},
+    )
+    assert r.status_code == 201, r.text
+    spec = r.json()
+    assert spec["meta"]["clarifies"] == call["id"]
+    job = await latest_job(user_client, pid, "process_material")
+    job = await wait_job(user_client, pid, job["id"])
+    assert job["status"] == "done", job
+    assert job["stats"]["tasks_updated"] == 1, job["stats"]
+    assert job["stats"]["tasks_created"] == 1, job["stats"]
+
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    tasks = r.json()
+    assert sum(1 for t in tasks if t["title"] == "Сделать фичу А") == 1, "задача не задвоилась"
+    feature = next(t for t in tasks if t["title"] == "Сделать фичу А")
+    clar = feature["extra"]["clarifications"]
+    assert len(clar) == 1, clar
+    assert "девяти игроков" in clar[0]["text"], "логика из ТЗ обязана доехать"
+    assert clar[0]["source"] == "tz.txt", "видно, откуда уточнение"
+    assert feature["extra"]["enriched"] is False, "досье собрано по старому тексту — переработать"
+    assert feature["extra"]["updated_by_materials"][0]["filename"] == "tz.txt"
+
+    # уточнение переживает проработку: она пересобирает description целиком,
+    # и лежи оно там — затёрлось бы
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{feature['id']}/enrich")
+    await wait_job(user_client, pid, r.json()["job_id"])
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    feature = next(t for t in r.json() if t["title"] == "Сделать фичу А")
+    assert feature["extra"]["enriched"] is True
+    assert "девяти игроков" in feature["extra"]["clarifications"][0]["text"]
+
+    # промах по названию не роняет обработку и не создаёт мусор
+    assert not any(t["title"] == "Задачи с таким названием нет" for t in tasks)
+
+
+async def test_note_is_a_material(user_client: httpx.AsyncClient, project: dict) -> None:
+    """Свой текст — такой же материал: отдельной механики под него нет."""
+    pid = project["id"]
+    r = await user_client.post(
+        f"/api/projects/{pid}/materials/note",
+        json={"title": "Мысли по фиче", "text": "Своими словами: нужно учесть вот это."},
+    )
+    assert r.status_code == 201, r.text
+    note = r.json()
+    assert note["media_type"] == "text/plain"
+    job = await latest_job(user_client, pid, "process_material")
+    job = await wait_job(user_client, pid, job["id"])
+    assert job["status"] == "done", job
+    r = await user_client.get(f"/api/projects/{pid}/materials/{note['id']}/text")
+    assert "Своими словами" in r.json()["text"]
+
+    r = await user_client.post(
+        f"/api/projects/{pid}/materials/note",
+        json={"text": "x", "clarifies": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert r.status_code == 400, "битая ссылка на материал должна отлетать сразу"
+
+
 async def test_material_upload_creates_tasks(user_client: httpx.AsyncClient, project: dict) -> None:
     pid = project["id"]
     content = "Созвон: обсудили фичу А и баг Б. Решили делать.".encode("utf-8")

@@ -16,6 +16,15 @@ export function taskAsPrompt(task: Task, projectName?: string): string {
     out.push("", task.description.trim());
   }
 
+  if (e.notes?.trim()) {
+    out.push("", "## Заметки владельца задачи", e.notes.trim());
+  }
+
+  if (e.clarifications?.length) {
+    out.push("", "## Уточнения из материалов");
+    for (const c of e.clarifications) out.push(`- [${c.source}] ${c.text}`);
+  }
+
   if (e.reading?.trim()) {
     out.push("", "## Как понята задача", e.reading.trim());
   }
