@@ -447,7 +447,19 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         except Exception:
             log.exception("Не удалось перегенерировать плагин")
 
-        stats: dict = {"scan": diff.stats, "ai": ai_stats, "mode": mode}
+        # неучтённые worklog-и уходят в граф здесь же: обновление карты ручное
+        # (автозапуска после каждой task_done больше нет), и «Обновить индекс»
+        # должен подхватывать всё накопившееся одним заходом
+        worklog_synced = await _sync_worklog_entries(project_id)
+        orphans = await _prune_orphan_task_nodes(project_id)
+
+        stats: dict = {
+            "scan": diff.stats,
+            "ai": ai_stats,
+            "mode": mode,
+            "worklog_synced": worklog_synced,
+            "orphan_tasks_removed": orphans,
+        }
         # очередь анализа: пока в бэклоге есть файлы и прогресс идёт — продолжаем сами
         if (
             params.get("auto_continue")
@@ -477,10 +489,23 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         raise
 
 
-async def knowledge_update(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
-    """Суб-агент актуализации: после log_work/task_done пересканирует изменения,
-    дообновляет граф и помечает записи worklog синхронизированными."""
-    stats = await index_project(job_id, project_id, {"mode": "update", "ai_limit": params.get("ai_limit", 20)})
+async def _prune_orphan_task_nodes(project_id: uuid.UUID) -> int:
+    """Подмести Task-узлы удалённых задач: карта не должна помнить то, чего
+    на доске уже нет."""
+    async with get_sessionmaker()() as session:
+        res = await session.execute(
+            select(TaskItem.id).where(TaskItem.project_id == project_id)
+        )
+        live = [str(i) for i in res.scalars()]
+    try:
+        return await graphdb.prune_task_nodes(str(project_id), live)
+    except Exception:
+        log.warning("Не удалось подмести узлы удалённых задач", exc_info=True)
+        return 0
+
+
+async def _sync_worklog_entries(project_id: uuid.UUID) -> int:
+    """Неучтённые записи worklog → узлы графа. Возвращает, сколько учтено."""
     pid = str(project_id)
     async with get_sessionmaker()() as session:
         res = await session.execute(
@@ -499,8 +524,16 @@ async def knowledge_update(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                     )
             e.synced = True
         await session.commit()
-    stats["worklog_synced"] = len(entries)
-    return stats
+    return len(entries)
+
+
+async def knowledge_update(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:
+    """Обновление карты знаний. Раньше автозапускался после каждой task_done/log_work
+    и конкурировал за ИИ-слоты с проработками; теперь тип оставлен для истории джобов
+    и старых очередей — вся работа (скан + worklog) делается внутри index_project."""
+    return await index_project(
+        job_id, project_id, {"mode": "update", "ai_limit": params.get("ai_limit", 20)}
+    )
 
 
 async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> dict:

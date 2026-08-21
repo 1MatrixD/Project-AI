@@ -178,11 +178,23 @@ class JobRunner:
         handler = self._handlers[job_type]
         try:
             stats = await handler(job_id, project_id, params)
+            # Хендлер может оставить итоговую строку для пользователя: она
+            # переживает финиш (обычный detail затирается — это «текущий шаг»).
+            # Без этого частичный провал выглядит как зелёное «готово».
+            final_detail = ""
+            if isinstance(stats, dict):
+                final_detail = str(stats.pop("final_detail", "") or "")[:300]
             async with maker() as session:
                 await session.execute(
                     update(Job)
                     .where(Job.id == job_id)
-                    .values(status="done", progress=1.0, stats=stats or {}, finished_at=utcnow(), detail="")
+                    .values(
+                        status="done",
+                        progress=1.0,
+                        stats=stats or {},
+                        finished_at=utcnow(),
+                        detail=final_detail,
+                    )
                 )
                 await session.commit()
         except JobCancelled:

@@ -62,6 +62,9 @@ class ProjectOut(ORMModel):
 
 class ProjectDetailOut(ProjectOut):
     stats: dict[str, Any] = {}
+    # сколько записей worklog ещё не учтено картой знаний: обновление карты
+    # ручное, и UI показывает этот счётчик бейджем на кнопке индекса
+    unsynced_worklogs: int = 0
 
 
 class IndexRequest(BaseModel):

@@ -55,7 +55,14 @@ export type SseEvent = {
   input?: string;
   detail?: string;
   meta?: Record<string, unknown>;
-  job?: { id: string; type: string; status: string; progress: number };
+  job?: {
+    id: string;
+    type: string;
+    status: string;
+    progress: number;
+    detail?: string;
+    error?: string | null;
+  };
 };
 
 async function readSseBody(res: Response, onEvent: (e: SseEvent) => void): Promise<void> {

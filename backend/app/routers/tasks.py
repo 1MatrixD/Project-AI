@@ -153,8 +153,10 @@ async def mark_done(
     project: Project = Depends(get_project),
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
-    """Пометить выполненной с отчётом: создаёт worklog и запускает суб-агента
-    обновления карты знаний."""
+    """Пометить выполненной с отчётом: создаёт worklog. Карта знаний обновляется
+    вручную («Обновить индекс»); автозапуск после каждой задачи убран — при пакетной
+    работе он конкурировал за ИИ-слоты с проработками. Счётчик неучтённых работ
+    отдаётся бейджем в деталях проекта."""
     task = await _get_task(session, project, task_id)
     task.status = "done"
     task.report = data.report[:8000]
@@ -171,8 +173,6 @@ async def mark_done(
     await session.refresh(task)
     await _sync_task_node(project, task, [str(f) for f in data.files[:30]])
     _notify_tasks_changed(project)
-    if not await runner.has_active(project.id, ["index", "knowledge_update"]):
-        await runner.submit(project.id, "knowledge_update", {})
     return TaskOut.model_validate(task)
 
 
@@ -221,6 +221,10 @@ async def delete_task(
     task = await _get_task(session, project, task_id)
     await session.delete(task)
     await session.commit()
+    try:
+        await graphdb.delete_task_node(str(project.id), str(task_id))
+    except Exception:
+        pass  # граф может быть недоступен — не валим API
     _notify_tasks_changed(project)
 
 
@@ -314,6 +318,4 @@ async def add_worklog(
     session.add(entry)
     await session.commit()
     await session.refresh(entry)
-    if not await runner.has_active(project.id, ["index", "knowledge_update"]):
-        await runner.submit(project.id, "knowledge_update", {})
     return WorkLogOut.model_validate(entry)

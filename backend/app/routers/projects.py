@@ -6,14 +6,14 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user, get_project
 from ..jobs_runner import runner
-from ..models import ChangeReport, Project, User
+from ..models import ChangeReport, Project, User, WorkLogEntry
 from ..schemas import (
     AskIn,
     AskOut,
@@ -74,8 +74,18 @@ async def create_project(
 
 
 @router.get("/{project_id}", response_model=ProjectDetailOut)
-async def get_project_detail(project: Project = Depends(get_project)) -> ProjectDetailOut:
+async def get_project_detail(
+    project: Project = Depends(get_project),
+    session: AsyncSession = Depends(get_session),
+) -> ProjectDetailOut:
     out = ProjectDetailOut.model_validate(project)
+    # карта обновляется вручную — бейдж честно показывает, сколько работ она не учитывает
+    res = await session.execute(
+        select(func.count()).select_from(WorkLogEntry).where(
+            WorkLogEntry.project_id == project.id, WorkLogEntry.synced.is_(False)
+        )
+    )
+    out.unsynced_worklogs = int(res.scalar() or 0)
     # сервисный токен наружу не отдаём
     meta = dict(out.meta)
     meta.pop("service_token", None)

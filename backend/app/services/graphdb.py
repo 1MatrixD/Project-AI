@@ -663,6 +663,40 @@ async def delete_project_graph(project_id: str) -> None:
         await s.run("MATCH (n) WHERE n.project_id = $pid DETACH DELETE n", pid=project_id)
 
 
+async def delete_task_node(project_id: str, task_id: str) -> None:
+    """Убрать узел одной задачи вместе со связями (AFFECTS к файлам, DEPENDS_ON).
+    Без этого удалённая задача продолжает жить в карте знаний: её находит поиск,
+    а связи с файлами подсказывают проработке соседних задач."""
+    async with get_driver().session() as s:
+        await s.run(
+            "MATCH (t:Task {uid: $pid + '|task|' + $tid}) DETACH DELETE t",
+            pid=project_id,
+            tid=task_id,
+        )
+
+
+async def prune_task_nodes(project_id: str, keep_ids: list[str]) -> int:
+    """Убрать Task-узлы, которых больше нет на доске. Удаление задачи могло не
+    дойти до графа (он бывает недоступен), а осиротевший узел остаётся в
+    полнотекстовом индексе: его заголовок — это формулировка задачи, поэтому на
+    похожий вопрос он попадает в выдачу и отъедает места у файлов, по которым
+    RLM выбирает, что читать."""
+    async with get_driver().session() as s:
+        res = await s.run(
+            """
+            MATCH (t:Task) WHERE t.project_id = $pid
+              AND NOT split(t.uid, '|')[2] IN $keep
+            WITH collect(t) AS stale
+            FOREACH (n IN stale | DETACH DELETE n)
+            RETURN size(stale) AS removed
+            """,
+            pid=project_id,
+            keep=keep_ids,
+        )
+        rec = await res.single()
+        return int(rec["removed"]) if rec else 0
+
+
 async def delete_task_nodes(project_id: str) -> None:
     """Убрать узлы задач проекта. Нужно при дублировании: клон графа приносит
     Task-узлы со старыми id внутри uid, а задачи-копии получают новые."""

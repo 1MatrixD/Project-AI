@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { API_URL, api, fmtDate, getToken } from "@/lib/api";
 import { pickDirNative } from "@/lib/pickDir";
-import type { ChangeReport, Decision, Job, Project } from "@/lib/types";
+import type { ChangeReport, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import DirPicker from "@/components/DirPicker";
 
@@ -319,7 +320,7 @@ export default function OverviewTab({
             <div className="text-xs text-[var(--muted)] leading-relaxed">
               Как код написан <b>по факту</b>: ИИ вывел это сам при индексации, руками не
               правится и перезаписывается на каждом прогоне. То, о чём <b>договорились</b>,
-              — в карточке «Соглашения проекта».
+              — на странице «Соглашения».
             </div>
             <p className="text-sm text-[var(--muted)] whitespace-pre-wrap leading-relaxed">{overview.conventions}</p>
           </div>
@@ -327,7 +328,17 @@ export default function OverviewTab({
       </div>
 
       <div className="space-y-4">
-        <DecisionsCard projectId={project.id} />
+        <Link
+          href={`/projects/${project.id}/decisions`}
+          className="card p-5 block hover:border-[var(--accent)] transition-colors space-y-1"
+        >
+          <div className="font-medium">Соглашения проекта →</div>
+          <div className="text-xs text-[var(--muted)] leading-relaxed">
+            Актуальные решения и смены подходов — то, чего в коде не прочитать.
+            Пишут человек и ИИ (record_decision); учитываются в каждой проработке
+            и проверке.
+          </div>
+        </Link>
         <div className="card p-5 space-y-3">
           <div className="font-medium">Статистика</div>
           {stats ? (
@@ -598,111 +609,3 @@ function GitImportModal({
   );
 }
 
-const DECISION_SOURCE: Record<string, string> = {
-  manual: "вручную",
-  meeting: "с созвона",
-  doc: "из документа",
-  chat: "из чата",
-};
-
-/** Соглашения проекта: актуальные решения и смены подходов — защита ИИ от ложных «багов». */
-function DecisionsCard({ projectId }: { projectId: string }) {
-  const [decisions, setDecisions] = useState<Decision[]>([]);
-  const [topic, setTopic] = useState("");
-  const [text, setText] = useState("");
-  const [showAdd, setShowAdd] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      setDecisions(await api<Decision[]>(`/projects/${projectId}/decisions`));
-    } catch {}
-  }, [projectId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (!topic.trim() || !text.trim()) return;
-    await api(`/projects/${projectId}/decisions`, {
-      method: "POST",
-      body: JSON.stringify({ topic: topic.trim(), text: text.trim() }),
-    });
-    setTopic("");
-    setText("");
-    setShowAdd(false);
-    load();
-  }
-
-  async function remove(id: string) {
-    if (!confirm("Удалить соглашение?")) return;
-    await api(`/projects/${projectId}/decisions/${id}`, { method: "DELETE" });
-    load();
-  }
-
-  return (
-    <div className="card p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="font-medium">Соглашения проекта</div>
-        <button className="btn btn-ghost text-sm" onClick={() => setShowAdd(!showAdd)}>
-          {showAdd ? "✕" : "+ Добавить"}
-        </button>
-      </div>
-      <div className="text-xs text-[var(--muted)] leading-relaxed">
-        То, чего <b>в коде не прочитать</b>: что считается правильным сейчас и от чего
-        отказались. Пишет сюда человек — этим карточка отличается от «Конвенций», которые
-        ИИ выводит из кода сам.
-        <br />
-        Зачем: код обычно отстаёт от решений. Без заметки «роль ORGANIZER упразднена, теперь
-        MANAGER + права» ИИ найдёт остатки старого подхода и заведёт их как баг; с ней —
-        поймёт, что это осознанный переход, и будет доделывать миграцию, а не откатывать её.
-        Соглашения подмешиваются в проработку задач, декомпозицию, ИИ-проверку «что уже
-        сделано», git-импорт и чат.
-        <br />
-        Пополняются вручную, автоматически из созвонов и через чат (record_decision).
-      </div>
-      {showAdd && (
-        <form onSubmit={add} className="space-y-2">
-          <input
-            className="input"
-            placeholder="Тема (например: Роли в админке)"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-          />
-          <textarea
-            className="input min-h-16 text-sm"
-            placeholder="Актуальное решение…"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-          <button className="btn w-full justify-center text-sm">Сохранить</button>
-        </form>
-      )}
-      {decisions.length === 0 ? (
-        <div className="text-sm text-[var(--muted)]">
-          Пока нет — добавь вручную, попроси ИИ в чате зафиксировать (record_decision) или
-          загрузи созвон: решения извлекаются автоматически.
-        </div>
-      ) : (
-        decisions.map((d) => (
-          <div key={d.id} className="border border-[var(--border)] rounded-lg p-3 space-y-1 group">
-            <div className="flex justify-between gap-2">
-              <div className="text-sm font-medium">{d.topic}</div>
-              <button
-                className="text-[var(--muted)] hover:text-red-300 opacity-0 group-hover:opacity-100 text-xs"
-                onClick={() => remove(d.id)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="text-xs text-[var(--muted)] whitespace-pre-wrap leading-relaxed">{d.text}</div>
-            <div className="text-[10px] text-[var(--muted)]">
-              {DECISION_SOURCE[d.source] ?? d.source} · {fmtDate(d.updated_at)}
-            </div>
-          </div>
-        ))
-      )}
-    </div>
-  );
-}
