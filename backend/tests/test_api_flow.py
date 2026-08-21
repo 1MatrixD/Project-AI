@@ -94,12 +94,16 @@ async def test_project_lifecycle_with_index(user_client: httpx.AsyncClient, samp
     )
     assert r.status_code == 400  # запись запрещена
 
-    # плагин сгенерирован
+    # плагин сгенерирован; сценарные скиллы на месте
     r = await user_client.get(f"/api/projects/{pid}/plugin")
     info = r.json()
     assert info["exists"], info
-    skill = Path(info["path"]) / "skills" / "architecture" / "SKILL.md"
-    assert skill.is_file()
+    skills_dir = Path(info["path"]) / "skills"
+    for name in ("architecture", "project-workflow", "task-briefing", "how-to-search"):
+        assert (skills_dir / name / "SKILL.md").is_file(), name
+    workflow = (skills_dir / "project-workflow" / "SKILL.md").read_text(encoding="utf-8")
+    assert "record_decision" in workflow, "workflow-скилл обязан учить фиксировать соглашения"
+    assert "суб-агент" not in workflow, "обновление карты теперь ручное — скилл не должен обещать автозапуск"
 
     # удаление
     r = await user_client.delete(f"/api/projects/{pid}")

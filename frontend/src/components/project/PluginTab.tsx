@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import type { PluginInfo } from "@/lib/types";
 
 type PluginFile = { path: string; size: number };
 
 export default function PluginTab({ projectId }: { projectId: string }) {
   const [info, setInfo] = useState<PluginInfo | null>(null);
-  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState<string | null>(null); // стартовый файл
 
   const load = useCallback(async () => {
@@ -21,24 +22,27 @@ export default function PluginTab({ projectId }: { projectId: string }) {
   }, [load]);
 
   async function regenerate() {
-    await api(`/projects/${projectId}/plugin/regenerate`, { method: "POST" });
-    setNotice("Плагин перегенерируется в фоне со свежими знаниями из карты.");
-    setTimeout(load, 3000);
+    try {
+      await api(`/projects/${projectId}/plugin/regenerate`, { method: "POST" });
+      toast("Плагин перегенерируется в фоне со свежими знаниями из карты.");
+      setTimeout(load, 3000);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
+    }
   }
 
   async function installLocal() {
     setBusy(true);
-    setNotice("");
     try {
       const r = await api<{ path: string }>(`/projects/${projectId}/plugin/local`, {
         method: "POST",
       });
-      setNotice(
+      toast(
         `Готово: ${r.path}. Перезапусти Claude Code в каталоге проекта — плагин подхватится там и только там.`
       );
       await load();
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     } finally {
       setBusy(false);
     }
@@ -46,13 +50,12 @@ export default function PluginTab({ projectId }: { projectId: string }) {
 
   async function uninstallLocal() {
     setBusy(true);
-    setNotice("");
     try {
       await api(`/projects/${projectId}/plugin/local`, { method: "DELETE" });
-      setNotice("Плагин убран из настроек проекта.");
+      toast("Плагин убран из настроек проекта.");
       await load();
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     } finally {
       setBusy(false);
     }
@@ -63,25 +66,54 @@ export default function PluginTab({ projectId }: { projectId: string }) {
   return (
     <div className="max-w-3xl space-y-4">
       <div className="card p-5 space-y-3">
-        <div className="font-medium">Плагин Claude Code для этого проекта</div>
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Плагин Claude Code для этого проекта</div>
+          <div className="relative">
+            <button
+              className="btn btn-ghost text-sm px-2.5"
+              title="Ещё"
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-40 card p-1 w-64 shadow-xl">
+                  <button
+                    className="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-[var(--surface-2)]"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      regenerate();
+                    }}
+                  >
+                    ⟳ Перегенерировать вручную
+                    <span className="block text-[11px] text-[var(--muted)]">
+                      обычно не нужно: обновляется сам после индексации и правок соглашений
+                    </span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
         <p className="text-sm text-[var(--muted)] leading-relaxed">
           Плагин подключает к твоему Claude Code MCP-сервер проекта (карта знаний, канбан,
           RLM-запросы, worklog) и скиллы, сгенерированные из анализа: архитектура,
-          бизнес-логика, рабочий процесс задач. После установки Claude в терминале будет
-          «знать» проект и сможет вести задачи — сделанное автоматически попадёт в карту знаний.
+          бизнес-логика, рабочий процесс, разбор задач, как искать. После установки Claude
+          в терминале будет «знать» проект и сможет вести задачи.
         </p>
         <div className="text-xs text-[var(--muted)]">
           Статус: {info.exists ? "✅ сгенерирован" : "⏳ ещё не сгенерирован (дождись индексации)"}
         </div>
         <div className="text-xs font-mono break-all text-[var(--muted)]">{info.path}</div>
-        <button className="btn btn-ghost" onClick={regenerate}>⟳ Перегенерировать</button>
-        {notice && <div className="text-sm text-[var(--accent)]">{notice}</div>}
       </div>
 
       <div className="card p-5 space-y-3">
         <div className="font-medium">Скиллы плагина</div>
         <p className="text-xs text-[var(--muted)]">
-          Генерируются из карты знаний при каждой индексации — Claude Code подхватит их автоматически.
+          Генерируются из карты знаний автоматически — после каждой индексации и при
+          изменении соглашений. Claude Code подхватит их сам.
         </p>
         {info.skills?.length ? (
           <div className="space-y-2">

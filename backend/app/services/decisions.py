@@ -64,4 +64,17 @@ async def add_decision(
         str(project_id),
         [{"kind": "decision", "key": str(decision.id), "title": decision.topic, "text": decision.text}],
     )
+    await refresh_plugin(project_id)
     return decision
+
+
+async def refresh_plugin(project_id: uuid.UUID) -> None:
+    """Соглашения зашиты в скиллы плагина — перегенерируем сразу же. Генерация
+    без ИИ (БД + запись файлов), поэтому автоматически, а не кнопкой: вопрос
+    «когда надо перегенерировать» не должен существовать."""
+    try:
+        from . import plugin_gen
+
+        await plugin_gen.generate_plugin(project_id)
+    except Exception:
+        log.warning("Плагин не перегенерировался после изменения соглашений", exc_info=True)

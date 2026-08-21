@@ -11,7 +11,7 @@ from ..deps import get_project
 from ..models import Decision, Project
 from ..schemas import DecisionIn, DecisionOut, DecisionUpdateIn
 from ..services import graphdb, vectors
-from ..services.decisions import add_decision
+from ..services.decisions import add_decision, refresh_plugin
 
 router = APIRouter(prefix="/projects/{project_id}/decisions", tags=["decisions"])
 
@@ -63,6 +63,7 @@ async def update_decision(
         str(project.id),
         [{"kind": "decision", "key": str(decision.id), "title": decision.topic, "text": decision.text}],
     )
+    await refresh_plugin(project.id)
     return DecisionOut.model_validate(decision)
 
 
@@ -82,3 +83,4 @@ async def delete_decision(
     except Exception:
         pass
     await vectors.delete(str(project.id), kind="decision", keys=[str(decision_id)])
+    await refresh_plugin(project.id)

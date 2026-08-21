@@ -52,6 +52,22 @@ async def test_decisions_crud(user_client: httpx.AsyncClient, project: dict) -> 
     assert r.json() == []
 
 
+async def test_decision_change_regenerates_plugin(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Скиллы плагина включают соглашения, поэтому правка соглашения перегенерирует
+    плагин сразу (генерация без ИИ) — кнопка «когда перегенерировать» не нужна."""
+    pid = project["id"]
+    r = await user_client.post(
+        f"/api/projects/{pid}/decisions",
+        json={"topic": "Тема для плагина", "text": "Решение, которое обязано попасть в скилл."},
+    )
+    assert r.status_code == 201
+    r = await user_client.get(f"/api/projects/{pid}/plugin")
+    skill = Path(r.json()["path"]) / "skills" / "architecture" / "SKILL.md"
+    assert "Тема для плагина" in skill.read_text(encoding="utf-8")
+
+
 async def test_material_creates_decisions(user_client: httpx.AsyncClient, project: dict) -> None:
     pid = project["id"]
     r = await user_client.post(
