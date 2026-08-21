@@ -23,6 +23,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "materials": ["list_documents", "read_document"],
     "tasks": [
         "task_list",
+        "task_get",
         "task_create",
         "task_update",
         "task_move",

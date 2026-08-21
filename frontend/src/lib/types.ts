@@ -22,6 +22,8 @@ export type Project = {
   created_at: string;
   updated_at: string;
   stats?: { nodes?: Record<string, number>; relations?: number };
+  // сколько работ (worklog) ещё не учтено картой знаний — бейдж на кнопке индекса
+  unsynced_worklogs?: number;
 };
 
 export type Job = {
@@ -82,6 +84,12 @@ export type TaskExtra = {
   files?: string[];
   related?: { title: string; relation: string; note: string }[];
   duplicate_of?: string | null;
+  // досье: как понята задача, гипотеза, где смотреть, образец, как проверить
+  reading?: string;
+  hypothesis?: { text: string; confidence: string } | null;
+  where_to_look?: { path: string; why: string }[];
+  reference?: string;
+  how_to_verify?: { what: string; how: string }[];
   // развилки, которые ИИ намеренно не решил за человека, и что заденет правка
   open_questions?: { question: string; options: string[]; lean: string }[];
   impact?: { what: string; why: string }[];

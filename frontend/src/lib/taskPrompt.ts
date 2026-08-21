@@ -16,17 +16,35 @@ export function taskAsPrompt(task: Task, projectName?: string): string {
     out.push("", task.description.trim());
   }
 
+  if (e.reading?.trim()) {
+    out.push("", "## Как понята задача", e.reading.trim());
+  }
+
+  if (e.hypothesis?.text) {
+    out.push("", `## Гипотеза (уверенность: ${e.hypothesis.confidence})`, e.hypothesis.text);
+  }
+
   if (e.original_description?.trim() && e.original_description.trim() !== task.description.trim()) {
     out.push("", "## Как задача была сформулирована изначально", e.original_description.trim());
   }
 
-  if (e.plan_summary?.trim()) {
-    out.push("", "## План решения", e.plan_summary.trim());
+  if (e.where_to_look?.length) {
+    out.push("", "## Где смотреть");
+    for (const w of e.where_to_look) out.push(`- \`${w.path}\` — ${w.why}`);
   }
 
-  if (task.plan.length) {
-    out.push("", "## Шаги");
-    task.plan.forEach((p, i) => out.push(`${i + 1}. [${p.done ? "x" : " "}] ${p.text}`));
+  if (e.reference?.trim()) {
+    out.push("", "## Образец рядом", e.reference.trim());
+  }
+
+  if (e.impact?.length) {
+    out.push("", "## Нюансы — что заденет работа");
+    for (const i of e.impact) out.push(`- ${i.what} — ${i.why}`);
+  }
+
+  if (e.how_to_verify?.length) {
+    out.push("", "## Как проверить");
+    for (const v of e.how_to_verify) out.push(`- ${v.what} — ${v.how}`);
   }
 
   if (e.open_questions?.length) {
@@ -38,9 +56,13 @@ export function taskAsPrompt(task: Task, projectName?: string): string {
     }
   }
 
-  if (e.impact?.length) {
-    out.push("", "## Что заденет");
-    for (const i of e.impact) out.push(`- ${i.what} — ${i.why}`);
+  if (e.plan_summary?.trim()) {
+    out.push("", "## План решения", e.plan_summary.trim());
+  }
+
+  if (task.plan.length) {
+    out.push("", "## Шаги");
+    task.plan.forEach((p, i) => out.push(`${i + 1}. ${p.text}`));
   }
 
   if (e.files?.length) {
@@ -49,7 +71,7 @@ export function taskAsPrompt(task: Task, projectName?: string): string {
   }
 
   if (e.related?.length) {
-    out.push("", "## Связанные задачи");
+    out.push("", "## Связанные темы");
     for (const r of e.related) out.push(`- [${r.relation}] «${r.title}» — ${r.note}`);
   }
 

@@ -155,7 +155,17 @@ def answer_for(prompt: str) -> str:
             },
             ensure_ascii=False,
         )
-    if "прорабатываешь короткую задачу в детальную" in prompt:
+    if "собираешь ДОСЬЕ по короткой задаче" in prompt:
+        # Симуляция реального сбоя: модель дописала досье, но JSON синтаксически
+        # битый. BAD_JSON=1 — всегда (проверка честного финала джобы),
+        # BAD_JSON_ONCE_FILE — только первый вызов (проверка ретрая синтеза).
+        broken = '```json\n{"description": "обрыв посреди'
+        if os.environ.get("FAKE_CLAUDE_BAD_JSON") == "1":
+            return broken
+        once_flag = os.environ.get("FAKE_CLAUDE_BAD_JSON_ONCE_FILE")
+        if once_flag and not os.path.exists(once_flag):
+            open(once_flag, "w").close()
+            return broken
         # Второй проход синтеза получает блок доисследования — значит вопросы закрыты.
         second_pass = "Доисследование:" in prompt
         unresolved = []
@@ -163,13 +173,22 @@ def answer_for(prompt: str) -> str:
             unresolved = ["чем отдаётся ответ обработчика"]
         return json.dumps(
             {
-                "description": "Детальная проработка: обработчик в main.py не подключён. Нужно добавить onClick по аналогии с util.py.",
-                "plan": [
-                    {"text": "Посмотреть обработчик в main.py"},
-                    {"text": "Подключить вызов по аналогии с src/util.py"},
-                    {"text": "Проверить в браузере"},
+                "description": "Детальная проработка: обработчик в main.py объявлен, но нигде не подключён; рабочий аналог живёт в src/util.py.",
+                "reading": "Кнопка не реагирует, потому что обработчик не подключён; другое прочтение — подключён, но падает.",
+                "hypothesis": {"text": "обработчик не подключён", "confidence": "high"},
+                "where_to_look": [
+                    {"path": "main.py", "why": "объявление обработчика: подключён ли он"},
+                    {"path": "src/util.py", "why": "рабочий аналог подключения"},
                 ],
-                "files": ["main.py", "src/util.py"],
+                "reference": "src/util.py — тот же обработчик подключён и работает",
+                "how_to_verify": [
+                    {
+                        "what": "клик по кнопке вызывает обработчик",
+                        "how": "тестов рядом нет, проверка руками в браузере",
+                    }
+                ],
+                # files сознательно не отдаём: досье без него должно взять пути
+                # из where_to_look (фолбэк в task_enrich)
                 "related_tasks": [
                     {"title": "Сделать фичу А", "relation": "overlaps", "note": "общие файлы"}
                 ],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,73 @@ async def project(user_client: httpx.AsyncClient, sample_project_dir: Path) -> d
     job = await latest_job(user_client, project["id"], "index")
     await wait_job(user_client, project["id"], job["id"])
     return project
+
+
+async def test_deleted_task_leaves_no_trace_in_graph(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Удалённая задача не должна оставаться в карте знаний: её находил поиск,
+    а связи AFFECTS с файлами подсказывали проработке соседних задач."""
+    pid = project["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Задача на снос"})
+    task_id = r.json()["id"]
+    # связь с файлом появляется при отчёте о выполнении
+    r = await user_client.post(
+        f"/api/projects/{pid}/tasks/{task_id}/done",
+        json={"report": "сделано", "files": ["main.py"]},
+    )
+    assert r.status_code == 200, r.text
+
+    async def graph_rows(query: str) -> list:
+        res = await user_client.post(f"/api/projects/{pid}/graph/cypher", json={"query": query})
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    node_q = "MATCH (t:Task {project_id: $pid}) WHERE t.title = 'Задача на снос' RETURN t.title AS title"
+    edge_q = (
+        "MATCH (t:Task {project_id: $pid})-[:AFFECTS]->(f:File) "
+        "WHERE t.title = 'Задача на снос' RETURN f.path AS path"
+    )
+    assert await graph_rows(node_q), "узел задачи должен быть в графе до удаления"
+    assert await graph_rows(edge_q), "связь с файлом должна быть в графе до удаления"
+
+    r = await user_client.delete(f"/api/projects/{pid}/tasks/{task_id}")
+    assert r.status_code == 204
+    assert await graph_rows(node_q) == [], "узел задачи остался в карте знаний"
+    assert await graph_rows(edge_q) == [], "связь с файлом пережила удаление задачи"
+
+
+async def test_index_prunes_orphan_task_nodes(
+    user_client: httpx.AsyncClient, project: dict
+) -> None:
+    """Узел задачи может пережить удаление, если граф в тот момент был недоступен.
+    Обновление индекса подметает такие сироты: их заголовок — формулировка задачи,
+    поэтому они попадают в полнотекстовую выдачу и отъедают места у файлов,
+    по которым RLM выбирает, что читать."""
+    from app.services import graphdb
+
+    pid = project["id"]
+    await graphdb.upsert_task_node(
+        pid, str(uuid.uuid4()), "Призрак удалённой задачи", "planned", ["main.py"]
+    )
+    q = (
+        "MATCH (t:Task {project_id: $pid}) WHERE t.title = 'Призрак удалённой задачи' "
+        "RETURN t.title AS title"
+    )
+
+    async def ghosts() -> list:
+        r = await user_client.post(f"/api/projects/{pid}/graph/cypher", json={"query": q})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    assert await ghosts(), "узел-призрак должен существовать до обновления индекса"
+
+    r = await user_client.post(f"/api/projects/{pid}/index", json={"mode": "update"})
+    assert r.status_code == 200, r.text
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["stats"]["orphan_tasks_removed"] >= 1, job["stats"]
+    assert await ghosts() == [], "сирота пережил обновление индекса"
 
 
 async def test_long_task_text_goes_into_description(
@@ -88,7 +156,8 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     )
     assert r.status_code == 200
 
-    # done с отчётом → worklog → knowledge_update
+    # done с отчётом → worklog копится; карта обновляется ВРУЧНУЮ — автозапуск
+    # после каждой задачи конкурировал за ИИ-слоты с проработками при пакетной работе
     r = await user_client.post(
         f"/api/projects/{pid}/tasks/{t1['id']}/done",
         json={"report": "Сделано в тесте", "files": ["main.py"]},
@@ -103,10 +172,18 @@ async def test_kanban_flow(user_client: httpx.AsyncClient, project: dict) -> Non
     assert entries and "Первая задача" in entries[0]["description"]
 
     job = await latest_job(user_client, pid, "knowledge_update")
-    assert job is not None
-    job = await wait_job(user_client, pid, job["id"])
+    assert job is None, "автозапуск knowledge_update убран — карта обновляется вручную"
+    r = await user_client.get(f"/api/projects/{pid}")
+    assert r.json()["unsynced_worklogs"] >= 1, "бейдж должен показывать неучтённые работы"
+
+    # ручное «Обновить индекс» подхватывает накопленный worklog одним заходом
+    r = await user_client.post(f"/api/projects/{pid}/index", json={"mode": "update"})
+    assert r.status_code == 200, r.text
+    job = await wait_job(user_client, pid, r.json()["job_id"])
     assert job["status"] == "done"
     assert job["stats"]["worklog_synced"] >= 1
+    r = await user_client.get(f"/api/projects/{pid}")
+    assert r.json()["unsynced_worklogs"] == 0
 
     # задача есть в графе
     r = await user_client.post(
@@ -275,20 +352,60 @@ async def test_enrich_task_rlm(
     r = await user_client.get(f"/api/projects/{pid}/tasks")
     enriched = next(t for t in r.json() if t["id"] == task["id"])
     assert "Детальная проработка" in enriched["description"]
-    assert enriched["extra"]["enriched"] is True
-    assert enriched["extra"]["original_description"] == "коротко с созвона"
-    assert "main.py" in enriched["extra"]["files"]
-    assert enriched["extra"]["related"][0]["relation"] == "overlaps"
-    # план — чекбокс-шаги
-    assert enriched["plan"][0] == {"text": "Посмотреть обработчик в main.py", "done": False}
+    extra = enriched["extra"]
+    assert extra["enriched"] is True
+    assert extra["original_description"] == "коротко с созвона"
+    assert extra["related"][0]["relation"] == "overlaps"
+    # досье: где смотреть / гипотеза / образец / как проверить
+    assert extra["where_to_look"][0] == {
+        "path": "main.py",
+        "why": "объявление обработчика: подключён ли он",
+    }
+    assert extra["hypothesis"] == {"text": "обработчик не подключён", "confidence": "high"}
+    assert "util.py" in extra["reference"]
+    assert extra["how_to_verify"][0]["how"].startswith("тестов рядом нет")
+    assert extra["reading"]
+    # синтез files не отдал — пути берутся из where_to_look
+    assert extra["files"] == ["main.py", "src/util.py"]
+    # досье не предписывает решение: план остаётся пустым, проработка его не пишет
+    assert enriched["plan"] == []
 
-    # тоггл чекбокса
-    plan = enriched["plan"]
-    plan[0]["done"] = True
-    r = await user_client.patch(
-        f"/api/projects/{pid}/tasks/{task['id']}", json={"plan": plan}
-    )
-    assert r.json()["plan"][0]["done"] is True
+
+async def test_enrich_retries_broken_json_synthesis(
+    user_client: httpx.AsyncClient, project: dict, monkeypatch, tmp_path: Path
+) -> None:
+    """Синтез иногда отдаёт синтаксически битый JSON. Исследование перед ним идёт
+    минуты, а повтор синтеза стоит секунды — одна кривая запятая не должна
+    выбрасывать всю проработку."""
+    flag = tmp_path / "bad_json_once"
+    monkeypatch.setenv("FAKE_CLAUDE_BAD_JSON_ONCE_FILE", str(flag))
+    pid = project["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Задача с ретраем"})
+    task_id = r.json()["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{task_id}/enrich")
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["stats"] == {"enriched": 1, "errors": 0, "total": 1}, job["stats"]
+    assert flag.exists(), "фейк обязан был отдать битый ответ первым заходом"
+    r = await user_client.get(f"/api/projects/{pid}/tasks")
+    enriched = next(t for t in r.json() if t["id"] == task_id)
+    assert enriched["extra"]["enriched"] is True
+
+
+async def test_enrich_failure_is_visible_on_finished_job(
+    user_client: httpx.AsyncClient, project: dict, monkeypatch
+) -> None:
+    """Раньше упавшая проработка выглядела зелёной: status=done, progress=100%,
+    detail затирался на финише. Пользователь видел «готово» и пустую карточку."""
+    monkeypatch.setenv("FAKE_CLAUDE_BAD_JSON", "1")
+    pid = project["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks", json={"title": "Обречённая задача"})
+    task_id = r.json()["id"]
+    r = await user_client.post(f"/api/projects/{pid}/tasks/{task_id}/enrich")
+    job = await wait_job(user_client, pid, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["stats"]["errors"] == 1, job["stats"]
+    assert "ошибк" in job["detail"], f"итоговая строка обязана говорить об ошибке: {job['detail']!r}"
 
 
 async def test_verify_tasks(user_client: httpx.AsyncClient, project: dict) -> None:

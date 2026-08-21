@@ -10,7 +10,6 @@ from ..config import get_settings
 from ..db import get_sessionmaker
 from ..jobs_runner import runner
 from ..models import Project, TaskItem
-from ..schemas import normalize_plan
 from . import claude_cli, graphdb, rlm
 from .decisions import get_decisions_text
 from .prompts import (
@@ -24,10 +23,11 @@ log = logging.getLogger("projectai.enrich")
 
 """RLM-проработка задач.
 
-Короткая задача с созвона → детальная инженерная задача, основанная на реальном
-устройстве кодовой базы: RLM-исследование (корень выбирает файлы по карте знаний,
-под-агенты их читают) даёт факты со ссылками на файлы, финальный синтез собирает
-описание и пошаговый план в стиле «как реально решают задачу». Существующие задачи
+Короткая задача с созвона → досье для исполнителя (человека или ИИ-агента):
+RLM-исследование (корень выбирает файлы по карте знаний, под-агенты их читают)
+даёт факты со ссылками на файлы, финальный синтез собирает досье — где смотреть,
+нюансы, как проверить, развилки. Решение НЕ предписывается: план от разведчика
+становится потолком для исполнителя, факты — полом. Существующие задачи
 (сделанные и открытые) участвуют в контексте — для дубликатов, пересечений и
 продолжений.
 """
@@ -100,7 +100,7 @@ async def enrich_one(
         await report(0.62, "исследование не удалось — опираюсь на карту знаний")
 
     # 2. Синтез детальной задачи
-    await report(0.68, "собираю описание и пошаговый план")
+    await report(0.68, "собираю досье: где смотреть, нюансы, как проверить")
     context = await graphdb.get_project_summary_context(pid, 3000)
     existing = await list_existing_tasks_text(project.id, exclude=task.id)
 
@@ -114,18 +114,31 @@ async def enrich_one(
             investigation=facts[:20000],
             existing_tasks=existing,
         )
-        result, _ = await claude_cli.run_json_prompt(
-            prompt,
-            system=TASK_ENRICH_SYSTEM,
-            tools=[],
-            model=s.ai_model,
-            reasoning="medium",
-            max_turns=s.claude_max_turns,
-            timeout=s.claude_timeout_sec,
-        )
-        if not isinstance(result, dict):
-            raise claude_cli.ClaudeError("Ожидался JSON-объект проработки")
-        return result
+        # Синтез иногда отдаёт синтаксически битый JSON (досье длинное). Ответ
+        # стоит секунды, а исследование перед ним — минуты, поэтому падать всей
+        # проработкой из-за одной запятой нельзя: пробуем ещё раз.
+        last_error: Exception = claude_cli.ClaudeError("Синтез не выполнялся")
+        for attempt in (1, 2):
+            try:
+                result, _ = await claude_cli.run_json_prompt(
+                    prompt,
+                    system=TASK_ENRICH_SYSTEM,
+                    tools=[],
+                    model=s.ai_model,
+                    reasoning="medium",
+                    max_turns=s.claude_max_turns,
+                    timeout=s.claude_timeout_sec,
+                )
+                if not isinstance(result, dict):
+                    raise claude_cli.ClaudeError("Ожидался JSON-объект проработки")
+                return result
+            except claude_cli.ClaudeError as e:
+                last_error = e
+                log.warning(
+                    "Синтез досье «%s» не распарсился (попытка %d): %s",
+                    task.title[:60], attempt, str(e)[:200],
+                )
+        raise last_error
 
     obj = await synthesize(investigation_text)
 
@@ -157,8 +170,30 @@ async def enrich_one(
             log.warning("Доисследование задачи %s упало: %s", task.id, e)
 
     description = str(obj.get("description", "")).strip()
-    plan = normalize_plan(obj.get("plan"))
-    files = [str(f)[:500] for f in (obj.get("files") or [])[:40]]
+    reading = str(obj.get("reading", "")).strip()[:2000]
+    hyp = obj.get("hypothesis") or {}
+    hypothesis = (
+        {
+            "text": str(hyp.get("text", "")).strip()[:1000],
+            "confidence": str(hyp.get("confidence", "medium"))[:10],
+        }
+        if isinstance(hyp, dict) and str(hyp.get("text", "")).strip()
+        else None
+    )
+    where_to_look = [
+        {"path": str(w.get("path", ""))[:500], "why": str(w.get("why", ""))[:400]}
+        for w in (obj.get("where_to_look") or [])[:20]
+        if isinstance(w, dict) and str(w.get("path", "")).strip()
+    ]
+    reference = str(obj.get("reference", "")).strip()[:1500]
+    how_to_verify = [
+        {"what": str(v.get("what", ""))[:300], "how": str(v.get("how", ""))[:500]}
+        for v in (obj.get("how_to_verify") or [])[:10]
+        if isinstance(v, dict) and str(v.get("what", "")).strip()
+    ]
+    files = [str(f)[:500] for f in (obj.get("files") or [])[:40]] or [
+        w["path"] for w in where_to_look
+    ]
     related = [
         {
             "title": str(r.get("title", ""))[:300],
@@ -190,12 +225,17 @@ async def enrich_one(
             return {"updated": 0}
         if description:
             db_task.description = description[:8000]
-        if plan:
-            db_task.plan = plan
+        # план сознательно не пишем: досье не предписывает решение (ручной план
+        # и подзадачи планировщика остаются как были)
         db_task.extra = {
             **(db_task.extra or {}),
             "enriched": True,
             "original_description": task.description,
+            "reading": reading,
+            "hypothesis": hypothesis,
+            "where_to_look": where_to_look,
+            "reference": reference,
+            "how_to_verify": how_to_verify,
             "files": files or investigated_paths[:40],
             "related": related,
             "duplicate_of": str(duplicate_of)[:300] if duplicate_of else None,
@@ -204,13 +244,15 @@ async def enrich_one(
         }
         await session.commit()
 
-    await report(0.95, "сохраняю описание, план и связи с файлами")
+    await report(0.95, "сохраняю досье и связи с файлами")
     await graphdb.upsert_task_node(
         pid, str(task.id), task.title, task.status, (files or investigated_paths)[:30]
     )
     return {
         "updated": 1,
         "files": len(files),
+        "where_to_look": len(where_to_look),
+        "how_to_verify": len(how_to_verify),
         "related": len(related),
         "open_questions": len(open_questions),
         "impact": len(impact),
@@ -290,4 +332,10 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
 
     await asyncio.gather(*(run_one(t) for t in tasks))
     runner.check_cancelled(job_id)
-    return {"enriched": done, "errors": errors, "total": len(tasks)}
+    stats: dict = {"enriched": done, "errors": errors, "total": len(tasks)}
+    if errors:
+        stats["final_detail"] = (
+            f"проработано {done} из {total}, с ошибкой: {errors} — "
+            "карточки без досье отправь на проработку ещё раз"
+        )
+    return stats

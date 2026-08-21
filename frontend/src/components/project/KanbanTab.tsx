@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmtDate } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import { copyToClipboard, taskAsPrompt } from "@/lib/taskPrompt";
-import type { Job, PlanStep, Task, TaskStatus } from "@/lib/types";
+import type { Job, Task, TaskStatus } from "@/lib/types";
 
 type TaskDetail = {
   files: { path: string; role: string | null; summary: string | null }[];
@@ -37,6 +38,12 @@ const RELATION_LABEL: Record<string, string> = {
   duplicate: "дубликат",
   continuation: "продолжение",
   overlaps: "пересекается",
+};
+
+const CONFIDENCE_LABEL: Record<string, string> = {
+  high: "уверенность высокая",
+  medium: "уверенность средняя",
+  low: "уверенность низкая",
 };
 
 /** Подпись для карточки на доске. Длинное ТЗ целиком живёт в description —
@@ -79,7 +86,6 @@ export default function KanbanTab({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -100,9 +106,9 @@ export default function KanbanTab({
       body: JSON.stringify({ title, description: title === text ? "" : text, enrich }),
     });
     setShowCreate(false);
-    setNotice(
+    toast(
       enrich
-        ? "Задача создана и отправлена на RLM-проработку — описание и план появятся через минуту-две."
+        ? "Задача создана и отправлена на RLM-проработку — досье (где смотреть, нюансы, как проверить) появится через минуту-две."
         : "Задача добавлена."
     );
     load();
@@ -122,29 +128,27 @@ export default function KanbanTab({
   }
 
   async function runVerify() {
-    setNotice("");
     try {
       await api(`/projects/${projectId}/tasks/verify`, { method: "POST" });
-      setNotice("ИИ проверяет, какие задачи уже реализованы в коде — прогресс сверху.");
+      toast("ИИ проверяет, какие задачи уже реализованы в коде — прогресс в шапке (⚙).");
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     }
   }
 
   async function runEnrichAll() {
-    setNotice("");
     try {
       const r = await api<{ job_id: string | null; tasks: number }>(
         `/projects/${projectId}/tasks/enrich`,
         { method: "POST", body: JSON.stringify({}) }
       );
-      setNotice(
+      toast(
         r.tasks === 0
           ? "Непроработанных задач нет — все открытые карточки уже разобраны RLM."
-          : `RLM-проработка запущена, задач: ${r.tasks}. Исследование кодовой базы → описания и планы со ссылками на файлы.`
+          : `RLM-проработка запущена, задач: ${r.tasks}. Исследование кодовой базы → досье со ссылками на файлы.`
       );
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Ошибка");
+      toast(e instanceof Error ? e.message : "Ошибка", "error");
     }
   }
 
@@ -160,7 +164,6 @@ export default function KanbanTab({
           🔍 Проверить, что уже сделано
         </button>
       </div>
-      {notice && <div className="text-sm text-[var(--accent)]">{notice}</div>}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 flex-1 min-h-0 items-start">
         {COLUMNS.map((col) => {
@@ -177,7 +180,6 @@ export default function KanbanTab({
                 <span className="chip">{colTasks.length}</span>
               </div>
               {colTasks.map((t) => {
-                const planDone = t.plan.filter((p) => p.done).length;
                 const waiting = t.status !== "done" ? openDeps(t, tasks) : [];
                 const busy = busyIds.has(t.id);
                 return (
@@ -192,9 +194,7 @@ export default function KanbanTab({
                     <div className="flex gap-1.5 flex-wrap">
                       <span className="chip">{SOURCE_LABEL[t.source] ?? t.source}</span>
                       {t.plan.length > 0 && (
-                        <span className="chip">
-                          план {planDone}/{t.plan.length}
-                        </span>
+                        <span className="chip">план · {t.plan.length}</span>
                       )}
                       {busy ? (
                         <span
@@ -313,8 +313,8 @@ function CreateTaskModal({
           placeholder={
             "Задача своими словами — можно абзацем, длина не ограничена.\n\n" +
             "Не нужно искать файлы и формулировать инженерно: с проработкой ИИ сам " +
-            "исследует кодовую базу и превратит это в описание со ссылками на файлы, " +
-            "планом и развилками, которые стоит решить до начала."
+            "исследует кодовую базу и соберёт досье — где смотреть, нюансы, " +
+            "как проверить и развилки, которые стоит решить до начала."
           }
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -395,17 +395,6 @@ function TaskModal({
     onChanged();
   }
 
-  async function togglePlanStep(index: number) {
-    const plan: PlanStep[] = task.plan.map((p, i) =>
-      i === index ? { ...p, done: !p.done } : p
-    );
-    await api(`/projects/${projectId}/tasks/${task.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ plan }),
-    });
-    onChanged(true);
-  }
-
   async function enrich() {
     setEnriching(true);
     try {
@@ -446,7 +435,7 @@ function TaskModal({
     const ok = await copyToClipboard(taskAsPrompt(task, projectName));
     setInfo(
       ok
-        ? "Задача скопирована: описание, шаги, развилки, что заденет и файлы — можно вставлять в Claude Code."
+        ? "Досье скопировано: где смотреть, нюансы, как проверить, развилки и файлы — можно вставлять в Claude Code."
         : "Не удалось скопировать — браузер отказал в доступе к буферу обмена."
     );
   }
@@ -460,7 +449,7 @@ function TaskModal({
             className="btn btn-ghost whitespace-nowrap"
             onClick={enrich}
             disabled={enriching}
-            title="RLM-исследование кодовой базы: детальное описание и план со ссылками на файлы"
+            title="RLM-исследование кодовой базы: досье — где смотреть, нюансы, как проверить"
           >
             🧠 {task.extra?.enriched ? "Переработать" : "Проработать"}
           </button>
@@ -558,6 +547,25 @@ function TaskModal({
           onChange={(e) => setDescription(e.target.value)}
         />
 
+        {(task.extra?.reading || task.extra?.hypothesis?.text) && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Как понята задача</div>
+            {task.extra?.reading && (
+              <div className="text-xs text-[var(--muted)] leading-relaxed whitespace-pre-wrap">
+                {task.extra.reading}
+              </div>
+            )}
+            {task.extra?.hypothesis?.text && (
+              <div className="text-xs leading-relaxed">
+                <span className="chip mr-1.5">
+                  гипотеза · {CONFIDENCE_LABEL[task.extra.hypothesis.confidence] ?? task.extra.hypothesis.confidence}
+                </span>
+                {task.extra.hypothesis.text}
+              </div>
+            )}
+          </div>
+        )}
+
         {task.extra?.plan_summary && (
           <div className="space-y-1">
             <div className="text-sm font-medium">План решения</div>
@@ -590,28 +598,17 @@ function TaskModal({
           </div>
         )}
 
+        {/* План без чекбоксов: их состояние ничем не читалось — декорация.
+            Блок остаётся ради старых карточек и подзадач планировщика,
+            новые проработки план не заполняют. */}
         {task.plan.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="text-sm font-medium">
-              План{" "}
-              <span className="text-[var(--muted)] font-normal">
-                {task.plan.filter((p) => p.done).length}/{task.plan.length}
-              </span>
-            </div>
-            {task.plan.map((p, i) => (
-              <label
-                key={i}
-                className="flex items-start gap-2.5 text-sm cursor-pointer group border border-transparent hover:border-[var(--border)] rounded-lg px-2 py-1.5 -mx-2"
-              >
-                <input
-                  type="checkbox"
-                  checked={p.done}
-                  onChange={() => togglePlanStep(i)}
-                  className="mt-0.5 accent-[var(--accent)]"
-                />
-                <span className={p.done ? "line-through text-[var(--muted)]" : ""}>{p.text}</span>
-              </label>
-            ))}
+          <div className="space-y-1">
+            <div className="text-sm font-medium">План</div>
+            <ol className="text-sm space-y-1 list-decimal list-inside">
+              {task.plan.map((p, i) => (
+                <li key={i} className="leading-relaxed">{p.text}</li>
+              ))}
+            </ol>
           </div>
         )}
 
@@ -642,12 +639,45 @@ function TaskModal({
           </div>
         )}
 
+        {(task.extra?.where_to_look?.length ?? 0) > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Где смотреть{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — что проверить в каждом месте
+              </span>
+            </div>
+            <ul className="text-xs space-y-1">
+              {task.extra!.where_to_look!.map((w, idx) => (
+                <li key={idx} className="leading-relaxed">
+                  <code className="text-[var(--accent)] font-mono break-all">{w.path}</code>
+                  <span className="text-[var(--muted)]"> — {w.why}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {task.extra?.reference && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Образец рядом{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — где то же сделано правильно
+              </span>
+            </div>
+            <div className="text-xs text-[var(--muted)] leading-relaxed whitespace-pre-wrap">
+              {task.extra.reference}
+            </div>
+          </div>
+        )}
+
         {(task.extra?.impact?.length ?? 0) > 0 && (
           <div className="space-y-1">
             <div className="text-sm font-medium">
-              Что заденет{" "}
+              Нюансы{" "}
               <span className="text-xs font-normal text-[var(--muted)]">
-                — проверить после правки
+                — что заденет работа
               </span>
             </div>
             <ul className="text-xs space-y-1">
@@ -655,6 +685,25 @@ function TaskModal({
                 <li key={idx}>
                   <span className="font-mono">{i.what}</span>
                   <span className="text-[var(--muted)]"> — {i.why}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {(task.extra?.how_to_verify?.length ?? 0) > 0 && (
+          <div className="space-y-1">
+            <div className="text-sm font-medium">
+              Как проверить{" "}
+              <span className="text-xs font-normal text-[var(--muted)]">
+                — что должно стать правдой
+              </span>
+            </div>
+            <ul className="text-xs space-y-1">
+              {task.extra!.how_to_verify!.map((v, idx) => (
+                <li key={idx} className="leading-relaxed">
+                  {v.what}
+                  <span className="text-[var(--muted)]"> — {v.how}</span>
                 </li>
               ))}
             </ul>
@@ -702,7 +751,7 @@ function TaskModal({
 
         {(task.extra?.related?.length ?? 0) > 0 && (
           <div className="space-y-1">
-            <div className="text-sm font-medium">Связанные задачи</div>
+            <div className="text-sm font-medium">Связанные темы</div>
             {task.extra!.related!.map((r, i) => (
               <div key={i} className="text-xs text-[var(--muted)]">
                 <span className="chip mr-1.5">{RELATION_LABEL[r.relation] ?? r.relation}</span>

@@ -30,8 +30,11 @@ mcp = MCPServer(
     instructions=(
         "Инструменты проекта в системе «Проекты ИИ»: карта знаний (Neo4j), материалы "
         "(транскрипты созвонов, ТЗ), канбан-доска задач, RLM-запросы по кодовой базе. "
-        "После выполнения работы обязательно вызывай task_done или log_work — это "
-        "запускает суб-агента, который обновляет карту знаний."
+        "Тяжёлую или мутно сформулированную задачу сначала разбери: task_create(enrich=true) "
+        "или task_enrich — система исследует кодовую базу и соберёт досье (где смотреть, "
+        "нюансы, как проверить, развилки), забери его через task_get. После выполнения "
+        "работы обязательно вызывай task_done или log_work — отчёт попадёт в карту знаний "
+        "при следующем обновлении индекса."
     ),
 )
 
@@ -173,9 +176,25 @@ async def task_list(status: str = "") -> str:
 
 
 @mcp.tool()
-async def task_create(title: str, description: str = "", plan: list[str] | None = None) -> str:
-    """Создать задачу в канбане (колонка «Запланировано»). plan — список шагов."""
-    return _fmt(await _post(f"{P}/tasks", {"title": title, "description": description, "source": "chat", "plan": plan or []}))
+async def task_create(
+    title: str, description: str = "", plan: list[str] | None = None, enrich: bool = False
+) -> str:
+    """Создать задачу в канбане (колонка «Запланировано»). plan — список шагов.
+    enrich=true — сразу отправить на RLM-разбор: система исследует кодовую базу
+    и соберёт досье (где смотреть, нюансы, как проверить, развилки); идёт минуты,
+    в фоне — готовое досье забирай через task_get."""
+    return _fmt(await _post(
+        f"{P}/tasks",
+        {"title": title, "description": description, "source": "chat", "plan": plan or [], "enrich": enrich},
+    ))
+
+
+@mcp.tool()
+async def task_get(task_id: str) -> str:
+    """Задача целиком: описание, досье разбора (где смотреть, нюансы, как проверить,
+    развилки в extra), связанные файлы из карты знаний и история работ. Если задача
+    ещё прорабатывается (extra.enriched отсутствует) — досье не готово, подожди."""
+    return _fmt(await _get(f"{P}/tasks/{task_id}/detail"))
 
 
 @mcp.tool()
@@ -194,14 +213,16 @@ async def task_move(task_id: str, status: str) -> str:
 @mcp.tool()
 async def task_done(task_id: str, report: str, files: list[str] | None = None) -> str:
     """Пометить задачу выполненной: отчёт «что сделано» + изменённые файлы.
-    Запускает суб-агента обновления карты знаний."""
+    Отчёт попадёт в карту знаний при следующем обновлении индекса
+    (request_reindex или кнопка в UI) — автозапуска после каждой задачи нет."""
     return _fmt(await _post(f"{P}/tasks/{task_id}/done", {"report": report, "files": files or []}))
 
 
 @mcp.tool()
 async def log_work(description: str, files: list[str] | None = None, task_id: str | None = None) -> str:
     """Зафиксировать сделанную работу вне задачи (или добавочно к задаче).
-    Запускает суб-агента обновления карты знаний."""
+    Запись попадёт в карту знаний при следующем обновлении индекса
+    (request_reindex или кнопка в UI)."""
     payload: dict = {"description": description, "files": files or []}
     if task_id:
         payload["task_id"] = task_id
@@ -210,9 +231,10 @@ async def log_work(description: str, files: list[str] | None = None, task_id: st
 
 @mcp.tool()
 async def task_enrich(task_id: str | None = None) -> str:
-    """RLM-проработка задач: короткая формулировка → детальная задача со ссылками
-    на файлы, планом-чеклистом и связями с существующими задачами. Без task_id
-    прорабатываются все новые задачи. Выполняется в фоне."""
+    """RLM-проработка задач: короткая формулировка → досье для исполнителя (где
+    смотреть, нюансы, как проверить, развилки) со ссылками на файлы и связями
+    с существующими задачами. Без task_id прорабатываются все новые задачи.
+    Выполняется в фоне."""
     if task_id:
         return _fmt(await _post(f"{P}/tasks/{task_id}/enrich"))
     return _fmt(await _post(f"{P}/tasks/enrich", {}))
@@ -250,7 +272,7 @@ def _apply_tool_access() -> None:
         return
     for tool_name in [
         "project_overview", "graph_search", "graph_cypher", "component_info", "file_info",
-        "list_files", "list_documents", "read_document", "rlm_query", "task_list",
+        "list_files", "list_documents", "read_document", "rlm_query", "task_list", "task_get",
         "task_create", "task_update", "task_move", "task_done", "task_enrich", "task_plan", "log_work",
         "list_decisions", "record_decision", "request_reindex", "git_import",
     ]:
