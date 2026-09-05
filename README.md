@@ -1,5 +1,8 @@
 # Project AI
 
+[![CI](https://github.com/1MatrixD/Project-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/1MatrixD/Project-AI/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **A self-hosted "second brain" for a codebase.** Point it at a repository and it builds a
 detailed knowledge map in Neo4j, turns messy meeting notes into engineering briefs, and
 generates a Claude Code plugin so the AI in your terminal actually knows the project.
@@ -203,6 +206,25 @@ with 14 tasks worded the way they arrive from support and calls, and an answer k
 plausible wrong versions. They are not part of the product; they are the benchmark used to judge
 whether a brief found the *actual* cause rather than the first similar-looking line.
 See [test_projects/README.md](test_projects/README.md).
+
+### Results so far
+
+Manual scoring by the author against the answer key, one run per task, `sonnet` as the indexing
+and briefing model, August 2026. Scale 0–10 per task: the real root cause is named, the required
+files are present, the brief contains a diagnosis step and a verification step, product decisions
+surface as open questions instead of being decided silently; a fabricated claim costs points.
+
+| Run | Result |
+|---|---|
+| Food-delivery fixture, tasks 1–5, first run (Aug 1–2) | 8, 9, 10, 10, 10 |
+| Same fixture, all 8 tasks, after the briefing prompt gained open questions and impact (Aug 2, `RLM_MAX_DEPTH=2`, follow-up off) | 10 on every task; the "tips" feature went from 7 to 10 |
+| Project AI itself, 6 tasks worded by the author (Aug 3) | 58 / 60; the two points were lost to one fabricated claim about a component bypassing the shared API client |
+
+Cited file and line references were spot-checked and were accurate. On task 4 the brief found two
+mechanisms missing from the answer key (SSE polling collapsing status transitions, two status changes
+before a single commit) and the key was extended. After the second run the key stopped
+discriminating, so further measurement needs the rental monorepo fixture (tasks 9–14, not scored yet)
+or the project itself. This is the author's manual evaluation, not a reproducible benchmark.
 
 ## Migrations
 
