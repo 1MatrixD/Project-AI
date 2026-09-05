@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import get_project
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import Job, Project
 from ..schemas import JobOut
@@ -79,7 +80,7 @@ async def get_job(
 ) -> JobOut:
     job = await session.get(Job, job_id)
     if job is None or job.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
+        raise HTTPException(status_code=404, detail=i18n._("Фоновая задача не найдена"))
     return JobOut.model_validate(job)
 
 
@@ -92,8 +93,8 @@ async def cancel_job(
     """Отмена фоновой задачи: queued — сразу, running — после текущего батча."""
     job = await session.get(Job, job_id)
     if job is None or job.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
+        raise HTTPException(status_code=404, detail=i18n._("Фоновая задача не найдена"))
     result = await runner.cancel(job_id)
     if result is None:
-        raise HTTPException(status_code=409, detail="Задача уже завершена")
+        raise HTTPException(status_code=409, detail=i18n._("Фоновая задача уже завершена"))
     return {"status": result}

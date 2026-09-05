@@ -10,6 +10,14 @@ export function setToken(token: string | null) {
   else localStorage.removeItem("projectai_token");
 }
 
+/** Язык интерфейса → Accept-Language: бэкенд отдаёт ошибки и подписи на языке
+ *  экрана. Берётся из <html lang>, который layout выставляет по локали next-intl. */
+export function langHeaders(): Record<string, string> {
+  if (typeof document === "undefined") return {};
+  const lang = document.documentElement.lang;
+  return lang ? { "Accept-Language": lang } : {};
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -23,6 +31,7 @@ export async function api<T = unknown>(
   options: RequestInit = {}
 ): Promise<T> {
   const headers: Record<string, string> = {
+    ...langHeaders(),
     ...(options.headers as Record<string, string>),
   };
   if (!(options.body instanceof FormData) && options.body) {
@@ -106,6 +115,7 @@ export async function streamSse(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...langHeaders(),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
@@ -122,24 +132,8 @@ export async function streamEvents(
 ): Promise<void> {
   const token = getToken();
   const res = await fetch(`${API_URL}/api${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { ...langHeaders(), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     signal,
   });
   await readSseBody(res, onEvent);
-}
-
-export function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-export function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} Б`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} МБ`;
-  return `${(n / 1024 ** 3).toFixed(2)} ГБ`;
 }

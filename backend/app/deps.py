@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
+from . import i18n
 from .models import Project, User
 from .security import decode_token
 
@@ -20,7 +21,7 @@ def _extract_token(request: Request) -> str:
     token = request.query_params.get("token")
     if token:
         return token
-    raise HTTPException(status_code=401, detail="Не авторизован")
+    raise HTTPException(status_code=401, detail=i18n._("Не авторизован"))
 
 
 async def get_auth_payload(request: Request) -> dict:
@@ -28,7 +29,7 @@ async def get_auth_payload(request: Request) -> dict:
     try:
         return decode_token(token)
     except pyjwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Недействительный токен")
+        raise HTTPException(status_code=401, detail=i18n._("Недействительный токен"))
 
 
 async def get_current_user(
@@ -37,7 +38,7 @@ async def get_current_user(
 ) -> User:
     user = await session.get(User, uuid.UUID(payload["sub"]))
     if user is None:
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
+        raise HTTPException(status_code=401, detail=i18n._("Пользователь не найден"))
     return user
 
 
@@ -49,14 +50,14 @@ async def get_project(
     """Доступ к проекту: владелец (scope=user) или сервисный токен этого проекта (scope=service)."""
     project = await session.get(Project, project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail="Проект не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Проект не найден"))
     scope = payload.get("scope", "user")
     if scope == "service":
         if payload.get("project_id") != str(project_id):
-            raise HTTPException(status_code=403, detail="Токен не для этого проекта")
+            raise HTTPException(status_code=403, detail=i18n._("Токен не для этого проекта"))
         return project
     if str(project.owner_id) != payload["sub"]:
-        raise HTTPException(status_code=403, detail="Нет доступа к проекту")
+        raise HTTPException(status_code=403, detail=i18n._("Нет доступа к проекту"))
     return project
 
 

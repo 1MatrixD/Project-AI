@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     ai_reasoning: str = "low"
     chat_default_model: str = "opus"
     chat_default_reasoning: str = "high"
+    #: язык ИИ-контента (обзоры, досье, задачи из материалов) и сообщений фоновых
+    #: работ: ru | en. Язык интерфейса выбирается в браузере отдельно.
+    ai_language: str = "en"
 
     whisper_model: str = "large-v3"
     whisper_device: str = "auto"

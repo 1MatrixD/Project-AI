@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_URL, api, fmtBytes, fmtDate, getToken } from "@/lib/api";
+import { useTranslations } from "next-intl";
+import { API_URL, api, getToken, langHeaders } from "@/lib/api";
+import { useFmt } from "@/lib/format";
 import { toast } from "@/components/Toast";
 import type { Material } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
@@ -13,6 +15,7 @@ export default function MaterialsTab({
   projectId: string;
   refreshTick: number;
 }) {
+  const t = useTranslations("materials");
   const [materials, setMaterials] = useState<Material[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -43,7 +46,7 @@ export default function MaterialsTab({
         fd.append("file", file);
         const res = await fetch(`${API_URL}/api/projects/${projectId}/materials${q}`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${getToken()}` },
+          headers: { Authorization: `Bearer ${getToken()}`, ...langHeaders() },
           body: fd,
         });
         if (!res.ok) {
@@ -51,15 +54,11 @@ export default function MaterialsTab({
           throw new Error(d?.detail ?? res.statusText);
         }
       }
-      toast(
-        clarifies
-          ? `Загружено как уточнение к «${clarifies.filename}»: ИИ дополнит задачи из того материала и отправит их на переработку.`
-          : "Материал загружен: ИИ извлечёт выжимку и задачи."
-      );
+      toast(clarifies ? t("uploadedClarify", { name: clarifies.filename }) : t("uploaded"));
       setClarifies(null);
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+      setError(e instanceof Error ? e.message : t("uploadError"));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -94,25 +93,23 @@ export default function MaterialsTab({
         <div className="text-2xl">📎</div>
         <div className="text-sm">
           {uploading
-            ? "Загружаю…"
+            ? t("uploading")
             : clarifies
-              ? `Файл станет уточнением к «${clarifies.filename}»`
-              : "Перетащи файлы или нажми: записи созвонов (mp4/m4a/mp3), ТЗ (pdf/docx), таблицы, документы"}
+              ? t("dropClarify", { name: clarifies.filename })
+              : t("drop")}
         </div>
         <div className="text-xs text-[var(--muted)]">
-          {clarifies
-            ? "ИИ дополнит задачи, рождённые тем материалом, и отправит их на переработку — новые заведёт отдельно."
-            : "Аудио и видео транскрибируются локальным Whisper; из текста ИИ извлечёт выжимку и задачи в канбан."}
+          {clarifies ? t("dropHintClarify") : t("dropHint")}
         </div>
         <input ref={fileRef} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
       </div>
       <div className="flex gap-2 items-center flex-wrap">
         <button className="btn btn-ghost text-sm" onClick={() => setNoteFor(clarifies)}>
-          ✍️ Заметка своими словами
+          {t("note")}
         </button>
         {clarifies && (
           <button className="btn btn-ghost text-sm" onClick={() => setClarifies(null)}>
-            ✕ Не уточнять «{clarifies.filename}»
+            {t("stopClarify", { name: clarifies.filename })}
           </button>
         )}
       </div>
@@ -143,7 +140,7 @@ export default function MaterialsTab({
           </div>
         ))}
         {materials.length === 0 && (
-          <div className="text-sm text-[var(--muted)] text-center py-6">Материалов пока нет</div>
+          <div className="text-sm text-[var(--muted)] text-center py-6">{t("empty")}</div>
         )}
       </div>
 
@@ -194,6 +191,8 @@ function MaterialRow({
   onNote?: () => void;
   clarifying?: boolean;
 }) {
+  const t = useTranslations("materials");
+  const fmt = useFmt();
   const icon = /\.(mp4|mov|avi|mkv|webm)$/i.test(m.filename)
     ? "🎬"
     : /\.(m4a|mp3|wav|ogg|flac)$/i.test(m.filename)
@@ -207,10 +206,10 @@ function MaterialRow({
       <div className="flex-1 min-w-64 space-y-1">
         <div className="text-sm font-medium">
           {m.filename}
-          {clarifying && <span className="chip ml-2">уточнение</span>}
+          {clarifying && <span className="chip ml-2">{t("clarificationChip")}</span>}
         </div>
         <div className="text-xs text-[var(--muted)]">
-          {fmtBytes(m.size)} · {fmtDate(m.created_at)}
+          {fmt.bytes(m.size)} · {fmt.date(m.created_at)}
         </div>
         {m.summary && <div className="text-sm text-[var(--muted)] whitespace-pre-wrap">{m.summary}</div>}
         {m.error && <div className="text-xs text-red-400">{m.error}</div>}
@@ -218,26 +217,22 @@ function MaterialRow({
       <div className="flex items-center gap-2 flex-wrap justify-end">
         <StatusBadge status={m.status} />
         {onClarify && m.status === "ready" && (
-          <button
-            className="btn btn-ghost text-xs"
-            title="Загрузить документ или написать заметку, которая уточняет задачи из этого материала"
-            onClick={onClarify}
-          >
-            + Уточнение
+          <button className="btn btn-ghost text-xs" title={t("clarifyTitle")} onClick={onClarify}>
+            {t("clarifyBtn")}
           </button>
         )}
         {onNote && m.status === "ready" && (
-          <button className="btn btn-ghost text-xs" title="Дописать своими словами" onClick={onNote}>
+          <button className="btn btn-ghost text-xs" title={t("noteTitle")} onClick={onNote}>
             ✍️
           </button>
         )}
         {m.status === "ready" && (
-          <button className="btn btn-ghost text-xs" onClick={() => onText(m)}>Текст</button>
+          <button className="btn btn-ghost text-xs" onClick={() => onText(m)}>{t("text")}</button>
         )}
         {(m.status === "error" || m.status === "ready") && (
           <button
             className="btn btn-ghost text-xs"
-            title="Обработать заново"
+            title={t("reprocess")}
             onClick={() =>
               api(`/projects/${projectId}/materials/${m.id}/reprocess`, { method: "POST" }).then(onReload)
             }
@@ -263,6 +258,8 @@ function NoteModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useTranslations("materials.noteModal");
+  const tCommon = useTranslations("common");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -279,14 +276,10 @@ function NoteModal({
           clarifies: clarifies?.id ?? null,
         }),
       });
-      toast(
-        clarifies
-          ? `Заметка добавлена как уточнение к «${clarifies.filename}» — задачи оттуда будут дополнены.`
-          : "Заметка добавлена: ИИ разберёт её как материал."
-      );
+      toast(clarifies ? t("savedClarify", { name: clarifies.filename }) : t("saved"));
       onSaved();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Ошибка", "error");
+      toast(e instanceof Error ? e.message : tCommon("error"), "error");
       setBusy(false);
     }
   }
@@ -295,22 +288,20 @@ function NoteModal({
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="card w-full max-w-2xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
         <div className="font-medium text-lg">
-          {clarifies ? `Уточнение к «${clarifies.filename}»` : "Заметка своими словами"}
+          {clarifies ? t("titleClarify", { name: clarifies.filename }) : t("title")}
         </div>
         <div className="text-xs text-[var(--muted)] leading-relaxed">
-          {clarifies
-            ? "Пойдёт тем же путём, что документ: ИИ дополнит задачи, рождённые тем материалом, и отправит их на переработку."
-            : "Обычный текст без разметки. ИИ разберёт его как материал: заведёт новые задачи и дополнит подходящие существующие."}
+          {clarifies ? t("hintClarify") : t("hint")}
         </div>
         <input
           className="input"
-          placeholder="Заголовок (необязательно)"
+          placeholder={t("titlePlaceholder")}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
         <textarea
           className="input min-h-48 text-sm leading-relaxed"
-          placeholder="Например: в матче девять игроков, замены только в перерыве, вратарь не считается полевым…"
+          placeholder={t("textPlaceholder")}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -321,9 +312,9 @@ function NoteModal({
           }}
         />
         <div className="flex justify-end gap-2">
-          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>Отмена</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>{tCommon("cancel")}</button>
           <button className="btn" onClick={submit} disabled={busy || !text.trim()} title="Ctrl+Enter">
-            {busy ? "Сохраняю…" : "Добавить"}
+            {busy ? t("saving") : tCommon("add")}
           </button>
         </div>
       </div>

@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api, streamEvents } from "@/lib/api";
 import type { Job, Project } from "@/lib/types";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import StatusBadge from "@/components/StatusBadge";
 import { toast } from "@/components/Toast";
 import { ProjectProvider } from "@/components/project/ProjectContext";
@@ -12,29 +14,27 @@ import { ProjectProvider } from "@/components/project/ProjectContext";
 /** Вкладки — маршруты, а не клиентское состояние: рефреш и прямые ссылки
  *  сохраняют текущую страницу (раньше F5 всегда сбрасывал на «Обзор»). */
 const NAV = [
-  { href: "", label: "Обзор" },
-  { href: "/tasks", label: "Задачи" },
-  { href: "/decisions", label: "Соглашения" },
-  { href: "/files", label: "Файлы" },
-  { href: "/materials", label: "Материалы" },
-  { href: "/map", label: "Карта" },
-  { href: "/plugin", label: "Плагин" },
-];
+  { href: "", key: "overview" },
+  { href: "/tasks", key: "tasks" },
+  { href: "/decisions", key: "decisions" },
+  { href: "/files", key: "files" },
+  { href: "/materials", key: "materials" },
+  { href: "/map", key: "map" },
+  { href: "/plugin", key: "plugin" },
+] as const;
 
-const JOB_LABELS: Record<string, string> = {
-  index: "Индексация",
-  knowledge_update: "Обновление карты знаний",
-  verify_tasks: "ИИ-проверка задач",
-  enrich_tasks: "RLM-проработка задач",
-  plan_task: "Планировщик задачи",
-  git_import: "Импорт истории git",
-  process_material: "Обработка материала",
-  plugin_generate: "Генерация плагина",
-};
+/** Подпись типа фоновой работы; неизвестный тип показывается как есть. */
+function useJobLabel() {
+  const t = useTranslations("layout.jobs");
+  return (type: string) => (t.has(type) ? t(type) : type);
+}
 
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const { id } = useParams<{ id: string }>();
   const pathname = usePathname();
+  const t = useTranslations("layout");
+  const tCommon = useTranslations("common");
+  const jobLabel = useJobLabel();
   const [project, setProject] = useState<Project | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -57,6 +57,12 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   useEffect(() => {
     loadRef.current = load;
   }, [load]);
+  // Подписи для тостов берём через ref: сам эффект подписки не должен
+  // пересоздаваться при смене языка.
+  const labelsRef = useRef({ jobLabel, failed: t("jobFailed") });
+  useEffect(() => {
+    labelsRef.current = { jobLabel, failed: t("jobFailed") };
+  });
   useEffect(() => {
     load();
     let stopped = false;
@@ -76,10 +82,10 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
                 // Итог работы — тостом: «готово с ошибками» раньше выглядело
                 // как обычное зелёное завершение, и пустые карточки удивляли.
                 if (e.job) {
-                  const label = JOB_LABELS[e.job.type] ?? e.job.type;
+                  const label = labelsRef.current.jobLabel(e.job.type);
                   if (st === "error") {
                     const first = String(e.job.error ?? "").split("\n")[0].slice(0, 160);
-                    toast(`${label}: ${first || "не выполнено"}`, "error");
+                    toast(`${label}: ${first || labelsRef.current.failed}`, "error");
                   } else if (st === "done" && e.job.detail) {
                     toast(`${label}: ${e.job.detail}`, "error");
                   }
@@ -96,19 +102,19 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
         if (!stopped) await new Promise((r) => setTimeout(r, 3000));
       }
     })();
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       loadRef.current();
       setRefreshTick((x) => x + 1);
     }, 20000);
     return () => {
       stopped = true;
       ctrl.abort();
-      clearInterval(t);
+      clearInterval(timer);
     };
   }, [id, load]);
 
   if (!project) {
-    return <div className="flex-1 flex items-center justify-center text-[var(--muted)]">Загрузка…</div>;
+    return <div className="flex-1 flex items-center justify-center text-[var(--muted)]">{tCommon("loading")}</div>;
   }
 
   const base = `/projects/${id}`;
@@ -136,11 +142,12 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
                     active ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-white"
                   }`}
                 >
-                  {n.label}
+                  {t(`nav.${n.key}`)}
                 </Link>
               );
             })}
           </nav>
+          <LanguageSwitcher />
         </div>
 
         <div className="flex-1 min-h-0">{children}</div>
@@ -161,6 +168,9 @@ function IndexButton({
   unsynced: number;
   onStarted: () => void;
 }) {
+  const t = useTranslations("layout");
+  const tCommon = useTranslations("common");
+
   async function run() {
     try {
       const autoContinue = localStorage.getItem("projectai_auto_continue") !== "0";
@@ -168,10 +178,10 @@ function IndexButton({
         method: "POST",
         body: JSON.stringify({ mode: "update", retry_errors: true, auto_continue: autoContinue }),
       });
-      toast("Обновление индекса запущено: скан изменений, ИИ-анализ и учёт выполненных работ.");
+      toast(t("indexStarted"));
       onStarted();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Ошибка", "error");
+      toast(e instanceof Error ? e.message : tCommon("error"), "error");
     }
   }
 
@@ -179,13 +189,9 @@ function IndexButton({
     <button
       className="btn btn-ghost text-sm relative"
       onClick={run}
-      title={
-        unsynced > 0
-          ? `Карта знаний не учитывает выполненных работ: ${unsynced}. Обновление подхватит их.`
-          : "Просканировать изменения и продолжить ИИ-анализ"
-      }
+      title={unsynced > 0 ? t("indexTitleUnsynced", { count: unsynced }) : t("indexTitle")}
     >
-      ⟳ Индекс
+      {t("indexButton")}
       {unsynced > 0 && (
         <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-amber-500 text-black text-[11px] font-medium flex items-center justify-center">
           {unsynced > 99 ? "99+" : unsynced}
@@ -206,6 +212,8 @@ function JobsTray({
   jobs: Job[];
   onAction: () => void;
 }) {
+  const t = useTranslations("layout");
+  const jobLabel = useJobLabel();
   const [open, setOpen] = useState(false);
   const active = jobs.filter((j) => j.status === "running" || j.status === "queued");
 
@@ -222,7 +230,7 @@ function JobsTray({
       <button
         className="btn btn-ghost text-sm pulse"
         onClick={() => setOpen((v) => !v)}
-        title="Работы ИИ: раскрыть список"
+        title={t("trayTitle")}
       >
         ⚙ {active.length} · {Math.round(avg * 100)}%
       </button>
@@ -234,12 +242,12 @@ function JobsTray({
               <div key={j.id} className="space-y-1">
                 <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
                   <span className="flex-1 truncate">
-                    {JOB_LABELS[j.type] ?? j.type}
+                    {jobLabel(j.type)}
                     {j.detail ? ` — ${j.detail}` : ""}
                   </span>
                   <span>{Math.round(j.progress * 100)}%</span>
                   <button
-                    title="Отменить задачу"
+                    title={t("cancelJob")}
                     onClick={async () => {
                       try {
                         await api(`/projects/${projectId}/jobs/${j.id}/cancel`, { method: "POST" });

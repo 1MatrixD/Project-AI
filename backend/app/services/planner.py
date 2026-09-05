@@ -7,12 +7,14 @@ from sqlalchemy import func, select
 
 from ..config import get_settings
 from ..db import get_sessionmaker
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import Project, TaskItem
 from ..schemas import normalize_plan
 from . import claude_cli, graphdb, rlm
 from .decisions import get_decisions_text
 from .prompts import (
+    localized,
     TASK_PLAN_INVESTIGATION_QUESTION,
     TASK_PLAN_PROMPT,
     TASK_PLAN_SYSTEM,
@@ -38,14 +40,14 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
         project = await session.get(Project, project_id)
         task = await session.get(TaskItem, task_id)
     if project is None or task is None or task.project_id != project_id:
-        raise RuntimeError("Задача не найдена")
+        raise RuntimeError(i18n._("Задача не найдена"))
 
     pid = str(project_id)
     decisions = await get_decisions_text(project_id)
 
     # 1. RLM-исследование: из каких частей состоит работа и в каком порядке
-    await runner.report(job_id, 0.1, f"Планировщик: исследование «{task.title[:60]}»")
-    question = TASK_PLAN_INVESTIGATION_QUESTION.format(
+    await runner.report(job_id, 0.1, i18n._("Планировщик: исследование «{title}»").format(title=task.title[:60]))
+    question = localized(TASK_PLAN_INVESTIGATION_QUESTION).format(
         title=task.title,
         description=(task.description or "")[:TASK_TEXT_LIMIT],
         decisions=decisions,
@@ -59,10 +61,10 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
     runner.check_cancelled(job_id)
 
     # 2. Синтез плана и декомпозиция
-    await runner.report(job_id, 0.55, "Планировщик: декомпозиция на подзадачи")
+    await runner.report(job_id, 0.55, i18n._("Планировщик: декомпозиция на подзадачи"))
     context = await graphdb.get_project_summary_context(pid, 3000)
     existing = await list_existing_tasks_text(project_id, exclude=task_id)
-    prompt = TASK_PLAN_PROMPT.format(
+    prompt = localized(TASK_PLAN_PROMPT).format(
         project_name=project.name,
         title=task.title,
         description=(task.description or "(без описания)")[:TASK_TEXT_LIMIT],
@@ -81,7 +83,7 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
         timeout=s.claude_timeout_sec,
     )
     if not isinstance(obj, dict) or not isinstance(obj.get("subtasks"), list):
-        raise claude_cli.ClaudeError("Ожидался JSON-объект с подзадачами")
+        raise claude_cli.ClaudeError(i18n._("Ожидался JSON-объект с подзадачами"))
     runner.check_cancelled(job_id)
 
     plan_summary = str(obj.get("plan_summary", "")).strip()[:4000]
@@ -91,10 +93,10 @@ async def plan_task(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> d
         if isinstance(st, dict) and str(st.get("title", "")).strip()
     ]
     if not raw:
-        raise claude_cli.ClaudeError("Планировщик не вернул ни одной подзадачи")
+        raise claude_cli.ClaudeError(i18n._("Планировщик не вернул ни одной подзадачи"))
 
     # 3. Создание подзадач: сначала все строки (чтобы получить id), затем зависимости
-    await runner.report(job_id, 0.85, f"Планировщик: создаю подзадачи ({len(raw)})")
+    await runner.report(job_id, 0.85, i18n._("Планировщик: создаю подзадачи ({count})").format(count=len(raw)))
     async with get_sessionmaker()() as session:
         res = await session.execute(
             select(func.max(TaskItem.order)).where(

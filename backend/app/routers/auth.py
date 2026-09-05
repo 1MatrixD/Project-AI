@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
+from .. import i18n
 from ..deps import get_current_user
 from ..models import User
 from ..schemas import LoginIn, RegisterIn, TokenOut, UserOut
@@ -18,7 +19,7 @@ async def register(data: RegisterIn, session: AsyncSession = Depends(get_session
     email = data.email.lower()
     exists = await session.execute(select(User).where(func.lower(User.email) == email))
     if exists.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Пользователь с таким email уже есть")
+        raise HTTPException(status_code=409, detail=i18n._("Пользователь с таким email уже есть"))
     user = User(email=email, password_hash=hash_password(data.password), name=data.name.strip())
     session.add(user)
     await session.commit()
@@ -32,7 +33,7 @@ async def login(data: LoginIn, session: AsyncSession = Depends(get_session)) -> 
     res = await session.execute(select(User).where(func.lower(User.email) == email))
     user = res.scalar_one_or_none()
     if user is None or not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+        raise HTTPException(status_code=401, detail=i18n._("Неверный email или пароль"))
     return TokenOut(token=create_user_token(user.id), user=UserOut.model_validate(user))
 
 

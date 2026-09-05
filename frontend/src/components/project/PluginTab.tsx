@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { toast } from "@/components/Toast";
 import type { PluginInfo } from "@/lib/types";
@@ -8,6 +9,8 @@ import type { PluginInfo } from "@/lib/types";
 type PluginFile = { path: string; size: number };
 
 export default function PluginTab({ projectId }: { projectId: string }) {
+  const t = useTranslations("plugin");
+  const tCommon = useTranslations("common");
   const [info, setInfo] = useState<PluginInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -24,10 +27,10 @@ export default function PluginTab({ projectId }: { projectId: string }) {
   async function regenerate() {
     try {
       await api(`/projects/${projectId}/plugin/regenerate`, { method: "POST" });
-      toast("Плагин перегенерируется в фоне со свежими знаниями из карты.");
+      toast(t("regenerated"));
       setTimeout(load, 3000);
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Ошибка", "error");
+      toast(e instanceof Error ? e.message : tCommon("error"), "error");
     }
   }
 
@@ -37,12 +40,10 @@ export default function PluginTab({ projectId }: { projectId: string }) {
       const r = await api<{ path: string }>(`/projects/${projectId}/plugin/local`, {
         method: "POST",
       });
-      toast(
-        `Готово: ${r.path}. Перезапусти Claude Code в каталоге проекта — плагин подхватится там и только там.`
-      );
+      toast(t("installed", { path: r.path }));
       await load();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Ошибка", "error");
+      toast(e instanceof Error ? e.message : tCommon("error"), "error");
     } finally {
       setBusy(false);
     }
@@ -52,26 +53,26 @@ export default function PluginTab({ projectId }: { projectId: string }) {
     setBusy(true);
     try {
       await api(`/projects/${projectId}/plugin/local`, { method: "DELETE" });
-      toast("Плагин убран из настроек проекта.");
+      toast(t("uninstalled"));
       await load();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Ошибка", "error");
+      toast(e instanceof Error ? e.message : tCommon("error"), "error");
     } finally {
       setBusy(false);
     }
   }
 
-  if (!info) return <div className="text-[var(--muted)]">Загрузка…</div>;
+  if (!info) return <div className="text-[var(--muted)]">{tCommon("loading")}</div>;
 
   return (
     <div className="max-w-3xl space-y-4">
       <div className="card p-5 space-y-3">
         <div className="flex items-center justify-between">
-          <div className="font-medium">Плагин Claude Code для этого проекта</div>
+          <div className="font-medium">{t("title")}</div>
           <div className="relative">
             <button
               className="btn btn-ghost text-sm px-2.5"
-              title="Ещё"
+              title={tCommon("more")}
               onClick={() => setMenuOpen((v) => !v)}
             >
               ⋯
@@ -87,34 +88,24 @@ export default function PluginTab({ projectId }: { projectId: string }) {
                       regenerate();
                     }}
                   >
-                    ⟳ Перегенерировать вручную
-                    <span className="block text-[11px] text-[var(--muted)]">
-                      обычно не нужно: обновляется сам после индексации и правок соглашений
-                    </span>
+                    {t("regenerate")}
+                    <span className="block text-[11px] text-[var(--muted)]">{t("regenerateHint")}</span>
                   </button>
                 </div>
               </>
             )}
           </div>
         </div>
-        <p className="text-sm text-[var(--muted)] leading-relaxed">
-          Плагин подключает к твоему Claude Code MCP-сервер проекта (карта знаний, канбан,
-          RLM-запросы, worklog) и скиллы, сгенерированные из анализа: архитектура,
-          бизнес-логика, рабочий процесс, разбор задач, как искать. После установки Claude
-          в терминале будет «знать» проект и сможет вести задачи.
-        </p>
+        <p className="text-sm text-[var(--muted)] leading-relaxed">{t("intro")}</p>
         <div className="text-xs text-[var(--muted)]">
-          Статус: {info.exists ? "✅ сгенерирован" : "⏳ ещё не сгенерирован (дождись индексации)"}
+          {t("status", { status: info.exists ? t("generated") : t("notGenerated") })}
         </div>
         <div className="text-xs font-mono break-all text-[var(--muted)]">{info.path}</div>
       </div>
 
       <div className="card p-5 space-y-3">
-        <div className="font-medium">Скиллы плагина</div>
-        <p className="text-xs text-[var(--muted)]">
-          Генерируются из карты знаний автоматически — после каждой индексации и при
-          изменении соглашений. Claude Code подхватит их сам.
-        </p>
+        <div className="font-medium">{t("skills")}</div>
+        <p className="text-xs text-[var(--muted)]">{t("skillsHint")}</p>
         {info.skills?.length ? (
           <div className="space-y-2">
             {info.skills.map((s) => (
@@ -128,24 +119,22 @@ export default function PluginTab({ projectId }: { projectId: string }) {
               </button>
             ))}
             <button className="btn btn-ghost text-sm" onClick={() => setBrowserOpen("")}>
-              📂 Все файлы плагина
+              {t("allFiles")}
             </button>
           </div>
         ) : (
-          <div className="text-sm text-[var(--muted)]">Появятся после индексации проекта</div>
+          <div className="text-sm text-[var(--muted)]">{t("skillsEmpty")}</div>
         )}
       </div>
 
       <div className="card p-5 space-y-3">
-        <div className="font-medium">MCP-инструменты сервера projectai</div>
-        <p className="text-xs text-[var(--muted)]">
-          Доступны и чату внутри системы, и Claude Code после установки плагина.
-        </p>
+        <div className="font-medium">{t("tools")}</div>
+        <p className="text-xs text-[var(--muted)]">{t("toolsHint")}</p>
         <div className="grid gap-1.5 sm:grid-cols-2">
-          {info.mcp_tools?.map((t) => (
-            <div key={t.name} className="border border-[var(--border)] rounded-lg p-2.5 space-y-0.5">
-              <div className="text-xs font-mono text-[var(--accent)]">{t.name}</div>
-              <div className="text-xs text-[var(--muted)]">{t.description}</div>
+          {info.mcp_tools?.map((tool) => (
+            <div key={tool.name} className="border border-[var(--border)] rounded-lg p-2.5 space-y-0.5">
+              <div className="text-xs font-mono text-[var(--accent)]">{tool.name}</div>
+              <div className="text-xs text-[var(--muted)]">{tool.description}</div>
             </div>
           ))}
         </div>
@@ -155,47 +144,49 @@ export default function PluginTab({ projectId }: { projectId: string }) {
 
       <div className="card p-5 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="font-medium">Установка</div>
+          <div className="font-medium">{t("install")}</div>
           {info.installed_locally && (
-            <span className="chip text-emerald-300">включён в проекте</span>
+            <span className="chip text-emerald-300">{t("enabledChip")}</span>
           )}
         </div>
         <p className="text-sm text-[var(--muted)] leading-relaxed">
-          Плагин может жить <b>только в этом проекте</b> — тогда он подключается, когда
-          Claude Code запущен в каталоге проекта, и не мешается в остальных. Настройка
-          пишется в <code className="font-mono text-xs">{info.local_settings_path}</code>;
-          чужие ключи в этом файле не трогаются.
+          {t.rich("installHint", {
+            path: info.local_settings_path,
+            b: (chunks) => <b>{chunks}</b>,
+            code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+          })}
         </p>
         <div className="flex gap-2 flex-wrap">
           <button className="btn" onClick={installLocal} disabled={busy}>
-            {info.installed_locally ? "Переустановить в проект" : "Включить в этом проекте"}
+            {info.installed_locally ? t("reinstall") : t("enable")}
           </button>
           {info.installed_locally && (
             <button className="btn btn-ghost" onClick={uninstallLocal} disabled={busy}>
-              Убрать из проекта
+              {t("uninstall")}
             </button>
           )}
         </div>
         <details className="text-sm">
           <summary className="cursor-pointer text-[var(--muted)] hover:text-[var(--foreground)]">
-            Поставить глобально (во всех проектах машины)
+            {t("global")}
           </summary>
           <ol className="space-y-3 list-decimal list-inside mt-2">
             <li>
-              Добавь маркетплейс «Проекты ИИ» (один раз):
+              {t("global1")}
               <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
                 claude plugin marketplace add {info.marketplace_path}
               </pre>
             </li>
             <li>
-              Установи плагин проекта:
+              {t("global2")}
               <pre className="bg-black/40 rounded-lg p-3 mt-1 text-xs font-mono overflow-x-auto">
                 claude plugin install {info.slug}@projectai
               </pre>
             </li>
             <li>
-              Так плагин попадёт в <code className="font-mono text-xs">~/.claude/settings.json</code> и
-              будет виден во всех сессиях Claude Code на машине.
+              {t.rich("global3", {
+                code: (chunks) => <code className="font-mono text-xs">{chunks}</code>,
+              })}
             </li>
           </ol>
         </details>
@@ -220,6 +211,7 @@ type ToolAccess = {
 
 /** Разграничение инструментов: чат приложения vs внешний плагин Claude Code. */
 function ToolAccessCard({ projectId }: { projectId: string }) {
+  const t = useTranslations("plugin.access");
   const [data, setData] = useState<ToolAccess | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -248,21 +240,16 @@ function ToolAccessCard({ projectId }: { projectId: string }) {
   return (
     <div className="card p-5 space-y-3">
       <div className="flex items-center justify-between">
-        <div className="font-medium">Доступ к инструментам</div>
-        {saved && <span className="text-xs text-emerald-300">✓ сохранено</span>}
+        <div className="font-medium">{t("title")}</div>
+        {saved && <span className="text-xs text-emerald-300">{t("saved")}</span>}
       </div>
-      <p className="text-xs text-[var(--muted)] leading-relaxed">
-        Что доступно ИИ в чате приложения и внешнему Claude Code через плагин. Технические
-        операции (реиндексация, git-импорт) у плагина по умолчанию выключены — внешний ИИ
-        работает над проектом, а не управляет системой. Применяется при следующем запуске
-        сессии ИИ.
-      </p>
+      <p className="text-xs text-[var(--muted)] leading-relaxed">{t("hint")}</p>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-xs text-[var(--muted)] text-left">
-            <th className="py-1.5 font-normal">Группа инструментов</th>
-            <th className="py-1.5 font-normal text-center w-28">Чат</th>
-            <th className="py-1.5 font-normal text-center w-28">Плагин</th>
+            <th className="py-1.5 font-normal">{t("group")}</th>
+            <th className="py-1.5 font-normal text-center w-28">{t("chat")}</th>
+            <th className="py-1.5 font-normal text-center w-28">{t("plugin")}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--border)]">
@@ -297,6 +284,8 @@ function PluginBrowser({
   initialPath: string;
   onClose: () => void;
 }) {
+  const t = useTranslations("plugin.browser");
+  const tCommon = useTranslations("common");
   const [files, setFiles] = useState<PluginFile[]>([]);
   const [selected, setSelected] = useState<string>(initialPath);
   const [content, setContent] = useState<string>("");
@@ -314,9 +303,9 @@ function PluginBrowser({
     setLoading(true);
     api<{ content: string }>(`/projects/${projectId}/plugin/file?path=${encodeURIComponent(selected)}`)
       .then((r) => setContent(r.content))
-      .catch((e) => setContent(`(не удалось открыть: ${e instanceof Error ? e.message : e})`))
+      .catch((e) => setContent(t("openFailed", { error: e instanceof Error ? e.message : String(e) })))
       .finally(() => setLoading(false));
-  }, [projectId, selected]);
+  }, [projectId, selected, t]);
 
   // группировка по каталогам для навигации
   const grouped: { dir: string; items: PluginFile[] }[] = [];
@@ -337,7 +326,7 @@ function PluginBrowser({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
-          <div className="font-medium text-sm">Файлы плагина</div>
+          <div className="font-medium text-sm">{t("title")}</div>
           <div className="text-xs font-mono text-[var(--muted)] truncate max-w-md">{selected}</div>
           <button className="text-[var(--muted)] hover:text-white" onClick={onClose}>✕</button>
         </div>
@@ -368,7 +357,7 @@ function PluginBrowser({
             ))}
           </div>
           <pre className="flex-1 overflow-auto p-5 text-[13px] leading-relaxed whitespace-pre-wrap font-mono">
-            {loading ? "Загрузка…" : content || "Выбери файл слева"}
+            {loading ? tCommon("loading") : content || t("pick")}
           </pre>
         </div>
       </div>

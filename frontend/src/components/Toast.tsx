@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 /** Глобальные тосты. Раньше уведомления рендерились в теле вкладки: переустановил
  *  плагин, находясь внизу страницы, — сообщение появилось сверху и осталось
@@ -19,6 +20,7 @@ export function toast(text: string, kind: "info" | "error" = "info") {
 }
 
 export function ToastHost() {
+  const t = useTranslations("common");
   const [items, setItems] = useState<ToastItem[]>([]);
 
   useEffect(() => {
@@ -35,18 +37,18 @@ export function ToastHost() {
   if (items.length === 0) return null;
   return (
     <div className="fixed bottom-4 right-4 z-[100] space-y-2 w-full max-w-sm pointer-events-none">
-      {items.map((t) => (
+      {items.map((item) => (
         <div
-          key={t.id}
-          onClick={() => setItems((xs) => xs.filter((x) => x.id !== t.id))}
+          key={item.id}
+          onClick={() => setItems((xs) => xs.filter((x) => x.id !== item.id))}
           className={`card px-4 py-3 text-sm leading-relaxed shadow-xl cursor-pointer pointer-events-auto ${
-            t.kind === "error"
+            item.kind === "error"
               ? "border-red-400/50 text-red-300"
               : "border-[var(--accent)]/50"
           }`}
-          title="Закрыть"
+          title={t("close")}
         >
-          {t.text}
+          {item.text}
         </div>
       ))}
     </div>

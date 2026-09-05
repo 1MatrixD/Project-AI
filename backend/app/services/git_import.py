@@ -11,6 +11,8 @@ from sqlalchemy import select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
+from .. import i18n
+from .prompts import localized
 from ..jobs_runner import runner
 from ..models import Project, TaskItem, utcnow
 from . import claude_cli, graphdb
@@ -244,10 +246,10 @@ async def git_import(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -> 
     async with maker() as session:
         project = await session.get(Project, project_id)
         if project is None:
-            raise RuntimeError("Проект не найден")
+            raise RuntimeError(i18n._("Проект не найден"))
         imported: set[str] = set(project.meta.get("git_imported", []))
 
-    await runner.report(job_id, 0.05, "Поиск git-репозиториев")
+    await runner.report(job_id, 0.05, i18n._("Поиск git-репозиториев"))
     from .roots import get_roots
 
     # все корни мультирепо-проекта; ключ репо: "." | "sub" | "alias" | "alias/sub"
@@ -308,7 +310,7 @@ async def _import_repos(
         await runner.report(
             job_id,
             0.1 + 0.8 * idx / len(repos),
-            f"Импорт git: {'корень' if rel_repo == '.' else rel_repo}",
+            i18n._("Импорт git: {repo}").format(repo=i18n._("корень") if rel_repo == "." else rel_repo),
         )
         rc = repo_configs.get(rel_repo, {})
         limit = max(1, min(1000, int(rc.get("limit", default_limit))))
@@ -325,7 +327,7 @@ async def _import_repos(
             runner.check_cancelled(job_id)
             chunk = fresh[chunk_start : chunk_start + 60]
             existing = await _existing_tasks_with_plans(project.id)
-            prompt = GIT_IMPORT_PROMPT.format(
+            prompt = localized(GIT_IMPORT_PROMPT).format(
                 project_name=project.name,
                 repo=rel_repo or ".",
                 project_context=context,
@@ -411,9 +413,12 @@ async def _apply_group(
                     task.plan = plan
                     if task.status == "planned":
                         task.status = "in_progress"
-                    note = (
-                        f"[git-импорт] Частично выполнено коммитами ({repo}): {commits_line}."
-                        f" Шаги плана: {', '.join(map(str, steps)) or '—'}.\n{description}"
+                    note = i18n._(
+                        "[git-импорт] Частично выполнено коммитами ({repo}): {commits}."
+                        " Шаги плана: {steps}.\n{description}"
+                    ).format(
+                        repo=repo, commits=commits_line,
+                        steps=", ".join(map(str, steps)) or "—", description=description,
                     )
                     task.report = (f"{task.report}\n\n{note}" if task.report else note)[:8000]
                     task.extra = {
@@ -428,9 +433,9 @@ async def _apply_group(
                     return
                 task.status = "done"
                 task.done_at = utcnow()
-                task.report = (
-                    f"[git-импорт] Подтверждено коммитами ({repo}): {commits_line}.\n{description}"
-                )[:8000]
+                task.report = i18n._(
+                    "[git-импорт] Подтверждено коммитами ({repo}): {commits}.\n{description}"
+                ).format(repo=repo, commits=commits_line, description=description)[:8000]
                 task.extra = {**(task.extra or {}), "commits": commits, "repo": repo}
                 await session.commit()
                 await graphdb.upsert_task_node(pid, str(task.id), task.title, "done", files)
@@ -450,7 +455,7 @@ async def _apply_group(
             description=description,
             status="done",
             source="git",
-            report=f"[git-импорт] Коммиты ({repo}): {commits_line}"[:8000],
+            report=i18n._("[git-импорт] Коммиты ({repo}): {commits}").format(repo=repo, commits=commits_line)[:8000],
             done_at=utcnow(),
             order=_order_from_dates(commits, commit_dates or {}),
             extra={"commits": commits, "repo": repo, "files": files},

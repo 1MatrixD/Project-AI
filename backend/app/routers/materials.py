@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_project
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import Material, Project
 from ..schemas import MaterialOut, NoteIn
@@ -59,7 +60,7 @@ async def _check_clarifies(
         return {}
     parent = await session.get(Material, clarifies)
     if parent is None or parent.project_id != project.id:
-        raise HTTPException(status_code=400, detail="Материал для уточнения не найден")
+        raise HTTPException(status_code=400, detail=i18n._("Материал для уточнения не найден"))
     return {"clarifies": str(clarifies)}
 
 
@@ -97,7 +98,7 @@ async def upload_material(
             if size > MAX_UPLOAD:
                 await out.close()
                 stored.unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail="Файл больше 2 ГБ")
+                raise HTTPException(status_code=413, detail=i18n._("Файл больше 2 ГБ"))
             await out.write(chunk)
 
     material.stored_path = str(stored)
@@ -164,14 +165,14 @@ async def material_text(
 ) -> dict:
     material = await session.get(Material, material_id)
     if material is None or material.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Материал не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Материал не найден"))
     if not material.text_path:
-        raise HTTPException(status_code=409, detail=f"Текст ещё не готов (статус: {material.status})")
+        raise HTTPException(status_code=409, detail=i18n._("Текст ещё не готов (статус: {status})").format(status=material.status))
     try:
         async with aiofiles.open(material.text_path, "r", encoding="utf-8") as f:
             text = await f.read()
     except OSError:
-        raise HTTPException(status_code=500, detail="Файл текста недоступен")
+        raise HTTPException(status_code=500, detail=i18n._("Файл текста недоступен"))
     chunk = text[offset : offset + min(limit_chars, 100_000)]
     return {
         "text": chunk,
@@ -190,7 +191,7 @@ async def reprocess_material(
 ) -> MaterialOut:
     material = await session.get(Material, material_id)
     if material is None or material.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Материал не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Материал не найден"))
     await runner.submit(
         project.id,
         "process_material",
@@ -215,7 +216,7 @@ async def delete_material(
 ) -> None:
     material = await session.get(Material, material_id)
     if material is None or material.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Материал не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Материал не найден"))
     from pathlib import Path
 
     for p in (material.stored_path, material.text_path):

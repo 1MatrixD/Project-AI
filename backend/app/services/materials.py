@@ -8,10 +8,11 @@ from sqlalchemy import func, select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
+from .. import i18n
 from ..jobs_runner import JobCancelled, runner
 from ..models import Material, Project, TaskItem, utcnow
 from . import claude_cli, extract, graphdb
-from .prompts import TASK_EXTRACTION_PROMPT, TASK_EXTRACTION_SYSTEM
+from .prompts import TASK_EXTRACTION_PROMPT, TASK_EXTRACTION_SYSTEM, localized
 
 log = logging.getLogger("projectai.materials")
 
@@ -84,7 +85,7 @@ async def extract_tasks_from_text(
         if clarifies_text
         else ""
     )
-    prompt = TASK_EXTRACTION_PROMPT.format(
+    prompt = localized(TASK_EXTRACTION_PROMPT).format(
         project_name=project.name,
         source_kind=source_kind,
         title=title,
@@ -104,7 +105,7 @@ async def extract_tasks_from_text(
         timeout=s.claude_timeout_sec,
     )
     if not isinstance(obj, dict):
-        raise claude_cli.ClaudeError("Ожидался JSON-объект с summary/tasks")
+        raise claude_cli.ClaudeError(i18n._("Ожидался JSON-объект с summary/tasks"))
     return obj
 
 
@@ -161,7 +162,7 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
         material = await session.get(Material, material_id)
         project = await session.get(Project, project_id)
         if material is None or project is None:
-            raise RuntimeError("Материал или проект не найден")
+            raise RuntimeError(i18n._("Материал или проект не найден"))
         material.status = "processing"
         material.error = None
         await session.commit()
@@ -181,7 +182,7 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
             )
             stats["reused_text"] = True
         elif is_av:
-            await runner.report(job_id, 0.1, "Транскрибация (whisper)")
+            await runner.report(job_id, 0.1, i18n._("Транскрибация (whisper)"))
             from . import transcribe
 
             result = await asyncio.to_thread(transcribe.transcribe_file, material.stored_path)
@@ -192,12 +193,12 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
                 "segments": result["segments_count"],
             }
         else:
-            await runner.report(job_id, 0.1, "Извлечение текста")
+            await runner.report(job_id, 0.1, i18n._("Извлечение текста"))
             text = await asyncio.to_thread(extract.extract_text, material.stored_path)
 
         text = text.strip()
         if not text:
-            raise RuntimeError("Пустой текст после обработки")
+            raise RuntimeError(i18n._("Пустой текст после обработки"))
 
         await asyncio.to_thread(
             lambda: open(tpath, "w", encoding="utf-8").write(text)
@@ -215,7 +216,7 @@ async def process_material(job_id: uuid.UUID, project_id: uuid.UUID, params: dic
         created_tasks = 0
         created_ids: list[str] = []
         if do_tasks:
-            await runner.report(job_id, 0.55, "ИИ: выжимка и извлечение задач")
+            await runner.report(job_id, 0.55, i18n._("ИИ: выжимка и извлечение задач"))
             try:
                 from ..schemas import normalize_plan
 

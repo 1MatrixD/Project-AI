@@ -10,6 +10,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from ..config import get_settings
+from .. import i18n
 from ..db import get_sessionmaker
 from ..jobs_runner import runner
 from ..models import Project
@@ -71,7 +72,7 @@ class WatcherManager:
         paths = [root_paths] if isinstance(root_paths, str) else list(root_paths)
         for p in paths:
             if not os.path.isdir(p):
-                raise FileNotFoundError(f"Каталог не найден: {p}")
+                raise FileNotFoundError(i18n._("Каталог не найден: {path}").format(path=p))
         self._loop = asyncio.get_running_loop()
         if self._observer is None:
             self._observer = Observer()

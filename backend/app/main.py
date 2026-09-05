@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import i18n
 from .config import get_settings
 from .db import init_db
 from .jobs_runner import runner
@@ -60,7 +61,7 @@ async def lifespan(app: FastAPI):
     await vectors.close_client()
 
 
-app = FastAPI(title="Проекты ИИ", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Project AI", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,10 +71,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# язык ответов API — из Accept-Language: фронтенд шлёт туда язык интерфейса
+app.add_middleware(i18n.LanguageMiddleware)
+
 for r in (auth.router, fs.router, projects.router, files.router, jobs.router, chats.router, tasks.router, materials.router, decisions.router):
     app.include_router(r, prefix="/api")
 
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "service": "Проекты ИИ"}
+    return {"status": "ok", "service": "projectai"}

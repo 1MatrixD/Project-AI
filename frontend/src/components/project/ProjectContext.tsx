@@ -18,6 +18,6 @@ export const ProjectProvider = Ctx.Provider;
 
 export function useProject(): ProjectCtx {
   const v = useContext(Ctx);
-  if (!v) throw new Error("useProject используется вне layout проекта");
+  if (!v) throw new Error("useProject must be used inside the project layout");
   return v;
 }

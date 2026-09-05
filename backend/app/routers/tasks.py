@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import get_project
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import Project, TaskItem, WorkLogEntry, utcnow
 from ..schemas import (
@@ -39,7 +40,7 @@ async def _next_order(session: AsyncSession, project_id: uuid.UUID, status: str)
 async def _get_task(session: AsyncSession, project: Project, task_id: uuid.UUID) -> TaskItem:
     task = await session.get(TaskItem, task_id)
     if task is None or task.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
+        raise HTTPException(status_code=404, detail=i18n._("Задача не найдена"))
     return task
 
 
@@ -111,7 +112,7 @@ async def update_task(
         task.extra = {**(task.extra or {}), "notes": data.notes[:8000]}
     if data.status is not None:
         if data.status not in VALID_STATUSES:
-            raise HTTPException(status_code=400, detail=f"Статус: {', '.join(sorted(VALID_STATUSES))}")
+            raise HTTPException(status_code=400, detail=i18n._("Статус: {options}").format(options=', '.join(sorted(VALID_STATUSES))))
         if data.status != task.status:
             task.status = data.status
             task.order = await _next_order(session, project.id, data.status)
@@ -134,7 +135,7 @@ async def reorder_tasks(
     status = body.get("status")
     ids = body.get("ordered_ids") or []
     if status not in VALID_STATUSES:
-        raise HTTPException(status_code=400, detail="Неверный статус")
+        raise HTTPException(status_code=400, detail=i18n._("Неверный статус"))
     for pos, tid in enumerate(ids, start=1):
         task = await session.get(TaskItem, uuid.UUID(str(tid)))
         if task is None or task.project_id != project.id:
@@ -167,7 +168,7 @@ async def mark_done(
     entry = WorkLogEntry(
         project_id=project.id,
         task_id=task.id,
-        description=f"Задача «{task.title}»: {data.report}"[:8000],
+        description=i18n._("Задача «{title}»: {report}").format(title=task.title, report=data.report)[:8000],
         files=[str(f)[:500] for f in data.files[:100]],
     )
     session.add(entry)
@@ -234,7 +235,7 @@ async def delete_task(
 async def verify_tasks_endpoint(project: Project = Depends(get_project)) -> dict:
     """ИИ-проверка: какие открытые задачи уже реализованы в коде."""
     if await runner.has_active(project.id, ["verify_tasks"]):
-        raise HTTPException(status_code=409, detail="Проверка уже идёт")
+        raise HTTPException(status_code=409, detail=i18n._("Проверка уже идёт"))
     job = await runner.submit(project.id, "verify_tasks", {})
     return {"job_id": str(job.id)}
 
@@ -247,7 +248,7 @@ async def enrich_tasks_endpoint(
     from ..services.task_enrich import count_pending
 
     if await runner.has_active(project.id, ["enrich_tasks"]):
-        raise HTTPException(status_code=409, detail="Проработка уже идёт")
+        raise HTTPException(status_code=409, detail=i18n._("Проработка уже идёт"))
     params: dict = {}
     if data.task_ids:
         params["task_ids"] = [str(t) for t in data.task_ids]
@@ -271,7 +272,7 @@ async def plan_one_task(
     задачу в подзадачи канбана с зависимостями (depends_on)."""
     await _get_task(session, project, task_id)
     if await runner.has_active(project.id, ["plan_task"]):
-        raise HTTPException(status_code=409, detail="Планирование уже идёт")
+        raise HTTPException(status_code=409, detail=i18n._("Планирование уже идёт"))
     job = await runner.submit(project.id, "plan_task", {"task_id": str(task_id)})
     return {"job_id": str(job.id)}
 

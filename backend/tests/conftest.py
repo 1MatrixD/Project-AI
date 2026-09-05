@@ -52,6 +52,8 @@ os.environ.update(
         # векторный поиск: отдельная коллекция + фейковый эмбеддер (без модели)
         "QDRANT_COLLECTION": "projectai_test",
         "EMBED_FAKE": "1",
+        # тесты фейкового claude и экспорта сверяют русские строки
+        "AI_LANGUAGE": "ru",
     }
 )
 

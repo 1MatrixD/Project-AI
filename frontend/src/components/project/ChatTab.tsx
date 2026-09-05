@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api, streamSse } from "@/lib/api";
 import type { Chat, ChatMessage } from "@/lib/types";
 
@@ -9,12 +10,7 @@ const MODELS = [
   { key: "sonnet", label: "Sonnet" },
   { key: "haiku", label: "Haiku" },
 ];
-const REASONING = [
-  { key: "none", label: "Без размышлений" },
-  { key: "low", label: "Лёгкий" },
-  { key: "medium", label: "Средний" },
-  { key: "high", label: "Глубокий" },
-];
+const REASONING = ["none", "low", "medium", "high"] as const;
 
 type LiveState = {
   streaming: boolean;
@@ -24,6 +20,8 @@ type LiveState = {
 };
 
 export default function ChatTab({ projectId }: { projectId: string }) {
+  const t = useTranslations("chat");
+  const tCommon = useTranslations("common");
   const [chats, setChats] = useState<Chat[]>([]);
   const [chat, setChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -97,12 +95,12 @@ export default function ChatTab({ projectId }: { projectId: string }) {
           } else if (ev.type === "tool" && ev.name) {
             setLive((s) => ({ ...s, tools: [...s.tools, ev.name!] }));
           } else if (ev.type === "error") {
-            setLive((s) => ({ ...s, error: ev.detail ?? "Ошибка" }));
+            setLive((s) => ({ ...s, error: ev.detail ?? tCommon("error") }));
           }
         }
       );
     } catch (err) {
-      setLive((s) => ({ ...s, error: err instanceof Error ? err.message : "Ошибка" }));
+      setLive((s) => ({ ...s, error: err instanceof Error ? err.message : tCommon("error") }));
     } finally {
       const msgs = await api<ChatMessage[]>(`/projects/${projectId}/chats/${current.id}/messages`).catch(() => null);
       if (msgs) setMessages(msgs);
@@ -114,7 +112,7 @@ export default function ChatTab({ projectId }: { projectId: string }) {
   return (
     <div className="flex gap-3 h-[calc(100vh-160px)] min-h-96">
       <div className="w-56 card p-3 space-y-2 overflow-y-auto shrink-0 hidden md:block">
-        <button className="btn w-full justify-center text-sm" onClick={newChat}>+ Новый чат</button>
+        <button className="btn w-full justify-center text-sm" onClick={newChat}>{t("newChat")}</button>
         {chats.map((c) => (
           <button
             key={c.id}
@@ -130,13 +128,13 @@ export default function ChatTab({ projectId }: { projectId: string }) {
 
       <div className="flex-1 card flex flex-col min-w-0">
         <div className="flex items-center gap-2 p-3 border-b border-[var(--border)] flex-wrap">
-          <div className="text-sm font-medium truncate flex-1">{chat?.title ?? "Чат с ИИ по проекту"}</div>
+          <div className="text-sm font-medium truncate flex-1">{chat?.title ?? t("defaultTitle")}</div>
           <select
             className="input !w-auto text-xs"
             value={chat?.model ?? "opus"}
             onChange={(e) => updateChatSettings({ model: e.target.value })}
             disabled={!chat}
-            title="Модель"
+            title={t("modelTitle")}
           >
             {MODELS.map((m) => (
               <option key={m.key} value={m.key}>{m.label}</option>
@@ -147,10 +145,10 @@ export default function ChatTab({ projectId }: { projectId: string }) {
             value={chat?.reasoning ?? "high"}
             onChange={(e) => updateChatSettings({ reasoning: e.target.value })}
             disabled={!chat}
-            title="Глубина размышлений"
+            title={t("reasoningTitle")}
           >
             {REASONING.map((r) => (
-              <option key={r.key} value={r.key}>{r.label}</option>
+              <option key={r} value={r}>{t(`reasoning.${r}`)}</option>
             ))}
           </select>
         </div>
@@ -158,11 +156,8 @@ export default function ChatTab({ projectId }: { projectId: string }) {
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 && !live.streaming && (
             <div className="text-sm text-[var(--muted)] text-center pt-10 space-y-2">
-              <div>Спроси о проекте, дай задачу с созвона или попроси составить план.</div>
-              <div className="text-xs">
-                ИИ видит карту знаний, файлы, материалы и канбан. Может создавать задачи и
-                помечать сделанное — карта знаний обновится автоматически.
-              </div>
+              <div>{t("emptyTitle")}</div>
+              <div className="text-xs">{t("emptyHint")}</div>
             </div>
           )}
           {messages.map((m) => (
@@ -172,13 +167,13 @@ export default function ChatTab({ projectId }: { projectId: string }) {
             <div className="space-y-2">
               {live.tools.length > 0 && (
                 <div className="flex gap-1.5 flex-wrap">
-                  {live.tools.map((t, i) => (
-                    <span key={i} className="chip text-[var(--accent)]">⚙ {t.replace("mcp__projectai__", "")}</span>
+                  {live.tools.map((tool, i) => (
+                    <span key={i} className="chip text-[var(--accent)]">⚙ {tool.replace("mcp__projectai__", "")}</span>
                   ))}
                 </div>
               )}
               <div className="text-sm whitespace-pre-wrap leading-relaxed">
-                {live.text || <span className="pulse text-[var(--muted)]">ИИ думает…</span>}
+                {live.text || <span className="pulse text-[var(--muted)]">{t("thinking")}</span>}
               </div>
             </div>
           )}
@@ -189,7 +184,7 @@ export default function ChatTab({ projectId }: { projectId: string }) {
         <form onSubmit={send} className="p-3 border-t border-[var(--border)] flex gap-2">
           <textarea
             className="input min-h-11 max-h-40 resize-y"
-            placeholder="Сообщение… (Enter — отправить, Shift+Enter — новая строка)"
+            placeholder={t("placeholder")}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -209,6 +204,7 @@ export default function ChatTab({ projectId }: { projectId: string }) {
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
+  const t = useTranslations("chat");
   const isUser = msg.role === "user";
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -221,7 +217,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         {!isUser && (msg.meta.cost_usd != null || msg.meta.duration_ms != null) && (
           <div className="text-[10px] text-[var(--muted)] mt-1.5">
             {msg.meta.model ?? ""}
-            {msg.meta.duration_ms != null ? ` · ${(msg.meta.duration_ms / 1000).toFixed(1)}с` : ""}
+            {msg.meta.duration_ms != null ? ` · ${t("seconds", { s: (msg.meta.duration_ms / 1000).toFixed(1) })}` : ""}
             {msg.meta.cost_usd != null ? ` · $${Number(msg.meta.cost_usd).toFixed(4)}` : ""}
           </div>
         )}

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from ..config import get_settings
+from .. import i18n
 
 log = logging.getLogger("projectai.claude")
 
@@ -33,7 +34,7 @@ def resolve_cmd_prefix() -> list[str]:
     path = shutil.which(s.claude_bin)
     if path is None:
         raise ClaudeError(
-            f"Claude Code CLI не найден ({s.claude_bin}). Установи и авторизуй claude."
+            i18n._("Claude Code CLI не найден ({bin}). Установи и авторизуй claude.").format(bin=s.claude_bin)
         )
     return [path]
 
@@ -50,6 +51,20 @@ def _build_env(reasoning: str | None) -> dict:
 
 # лимит командной строки Windows ~32767 символов — длинные промпты идут через stdin
 MAX_ARGV_PROMPT = 20000
+
+
+#: язык ИИ-контента → одна фраза в системный промпт каждого вызова. Шаблоны
+#: промптов написаны по-русски, и без явной директивы модель отвечает на языке
+#: инструкции, а не на языке, который выбрал пользователь.
+LANGUAGE_DIRECTIVE = {"en": "Write every natural-language part of your output in English."}
+
+
+def _with_language(system: str | None) -> str | None:
+    lang = get_settings().ai_language.strip().lower()
+    directive = LANGUAGE_DIRECTIVE.get(lang)
+    if not directive:
+        return system
+    return f"{system}\n\n{directive}" if system else directive
 
 
 def _base_cmd(
@@ -69,6 +84,7 @@ def _base_cmd(
     cmd += ["--output-format", output_format]
     if output_format == "stream-json":
         cmd.append("--verbose")
+    system = _with_language(system)
     if system:
         cmd += ["--append-system-prompt", system]
     if tools:
@@ -98,7 +114,7 @@ def _run_sync(
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except OSError as e:
-        raise ClaudeError(f"Не удалось запустить claude: {e}")
+        raise ClaudeError(i18n._("Не удалось запустить claude: {error}").format(error=e))
     out = proc.stdout.decode("utf-8", errors="replace")
     err = proc.stderr.decode("utf-8", errors="replace")
     return proc.returncode, out, err
@@ -139,15 +155,19 @@ async def run_prompt(
         prompt.encode("utf-8") if use_stdin else None,
     )
     if code != 0 and not out.strip():
-        raise ClaudeError(f"claude завершился с кодом {code}: {err[:2000]}")
+        raise ClaudeError(i18n._("claude завершился с кодом {code}: {stderr}").format(code=code, stderr=err[:2000]))
     try:
         data = json.loads(out)
     except json.JSONDecodeError:
-        raise ClaudeError(f"Невалидный JSON от claude (код {code}): {out[:500]} / stderr: {err[:500]}")
-    if data.get("is_error"):
-        detail = data.get("result") or data.get("error") or data.get("subtype") or "без деталей"
         raise ClaudeError(
-            f"claude вернул ошибку: {str(detail)[:2000]} (subtype={data.get('subtype')}, stderr={err[:300]})"
+            i18n._("Невалидный JSON от claude (код {code}): {out} / stderr: {stderr}").format(code=code, out=out[:500], stderr=err[:500])
+        )
+    if data.get("is_error"):
+        detail = data.get("result") or data.get("error") or data.get("subtype") or i18n._("без деталей")
+        raise ClaudeError(
+            i18n._("claude вернул ошибку: {detail} (subtype={subtype}, stderr={stderr})").format(
+                detail=str(detail)[:2000], subtype=data.get("subtype"), stderr=err[:300]
+            )
         )
     return data
 

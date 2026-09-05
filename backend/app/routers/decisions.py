@@ -7,6 +7,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
+from .. import i18n
 from ..deps import get_project
 from ..models import Decision, Project
 from ..schemas import DecisionIn, DecisionOut, DecisionUpdateIn
@@ -46,7 +47,7 @@ async def update_decision(
 ) -> DecisionOut:
     decision = await session.get(Decision, decision_id)
     if decision is None or decision.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Соглашение не найдено")
+        raise HTTPException(status_code=404, detail=i18n._("Соглашение не найдено"))
     if data.topic is not None:
         decision.topic = data.topic.strip()[:200]
     if data.text is not None:
@@ -75,7 +76,7 @@ async def delete_decision(
 ) -> None:
     decision = await session.get(Decision, decision_id)
     if decision is None or decision.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Соглашение не найдено")
+        raise HTTPException(status_code=404, detail=i18n._("Соглашение не найдено"))
     await session.delete(decision)
     await session.commit()
     try:

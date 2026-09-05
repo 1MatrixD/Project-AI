@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { GraphData } from "@/lib/types";
 
@@ -17,19 +18,10 @@ const LABEL_COLORS: Record<string, string> = {
   WorkLog: "#f472b6",
 };
 
-const LABEL_RU: Record<string, string> = {
-  Project: "Проект",
-  Component: "Компонент",
-  File: "Файл",
-  Entity: "Сущность",
-  Document: "Документ",
-  Task: "Задача",
-  WorkLog: "Работа",
-};
-
 type Node = { id: string; name: string; label: string; summary: string; kind: string; val: number };
 
 export default function GraphTab({ projectId }: { projectId: string }) {
+  const t = useTranslations("graph");
   const [data, setData] = useState<GraphData | null>(null);
   const [selected, setSelected] = useState<Node | null>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -66,7 +58,9 @@ export default function GraphTab({ projectId }: { projectId: string }) {
     };
   }, [data]);
 
-  if (!data) return <div className="text-[var(--muted)]">Загрузка карты…</div>;
+  const labelName = (label: string) => (t.has(`labels.${label}`) ? t(`labels.${label}`) : label);
+
+  if (!data) return <div className="text-[var(--muted)]">{t("loading")}</div>;
 
   return (
     <div className="space-y-2">
@@ -74,19 +68,17 @@ export default function GraphTab({ projectId }: { projectId: string }) {
         {Object.entries(LABEL_COLORS).map(([label, color]) => (
           <span key={label} className="chip">
             <span className="w-2 h-2 rounded-full inline-block mr-1.5" style={{ background: color }} />
-            {LABEL_RU[label] ?? label}
+            {labelName(label)}
           </span>
         ))}
         <span className="text-xs text-[var(--muted)]">
-          Узлов: {graphData.nodes.length}, связей: {graphData.links.length}
+          {t("counts", { nodes: graphData.nodes.length, links: graphData.links.length })}
         </span>
       </div>
       <div className="flex gap-3">
         <div id="graph-wrap" className="card flex-1 overflow-hidden">
           {graphData.nodes.length === 0 ? (
-            <div className="p-10 text-center text-sm text-[var(--muted)]">
-              Карта пуста — дождись окончания индексации.
-            </div>
+            <div className="p-10 text-center text-sm text-[var(--muted)]">{t("empty")}</div>
           ) : (
             <ForceGraph2D
               width={size.w}
@@ -111,7 +103,7 @@ export default function GraphTab({ projectId }: { projectId: string }) {
             </div>
             <div className="flex gap-1.5 flex-wrap">
               <span className="chip" style={{ color: LABEL_COLORS[selected.label] }}>
-                {LABEL_RU[selected.label] ?? selected.label}
+                {labelName(selected.label)}
               </span>
               {selected.kind && <span className="chip">{selected.kind}</span>}
             </div>

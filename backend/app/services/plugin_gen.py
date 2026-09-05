@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..config import BACKEND_ROOT, get_settings
 from ..db import get_sessionmaker
+from .. import i18n
 from ..models import Project
 from ..security import create_service_token
 
@@ -112,9 +113,9 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
         json.dumps(
             {
                 "name": slug,
-                "description": f"Знания и инструменты проекта «{project.name}» (Проекты ИИ)",
+                "description": i18n._("Знания и инструменты проекта «{name}» (Проекты ИИ)").format(name=project.name),
                 "version": "0.1.0",
-                "author": {"name": "Проекты ИИ"},
+                "author": {"name": i18n._("Проекты ИИ")},
             },
             ensure_ascii=False,
             indent=2,
@@ -134,38 +135,37 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     # --- скиллы из карты знаний ---
     skills_dir = plugin_dir / "skills"
 
-    arch_body_parts = [f"# Архитектура проекта «{project.name}»", ""]
+    arch_body_parts = [i18n._("# Архитектура проекта «{name}»").format(name=project.name), ""]
     if overview.get("summary"):
         arch_body_parts += [overview["summary"], ""]
     if detect.get("stack"):
-        arch_body_parts += ["## Стек", ", ".join(detect["stack"]), ""]
+        arch_body_parts += [i18n._("## Стек"), ", ".join(detect["stack"]), ""]
     for comp in (overview.get("components") or [])[:30]:
         arch_body_parts += [
             f"## {comp.get('name')} ({comp.get('kind', 'module')})",
             comp.get("summary", ""),
-            "Ключевые файлы: " + ", ".join(comp.get("paths", [])[:10]),
+            i18n._("Ключевые файлы: ") + ", ".join(comp.get("paths", [])[:10]),
             "",
         ]
     if overview.get("conventions"):
-        arch_body_parts += ["## Конвенции", overview["conventions"], ""]
+        arch_body_parts += [i18n._("## Конвенции"), overview["conventions"], ""]
     if decisions:
-        arch_body_parts.append("## Соглашения и актуальные решения")
+        arch_body_parts.append(i18n._("## Соглашения и актуальные решения"))
         arch_body_parts.append(
-            "Код, противоречащий этим решениям, — легаси, а не эталон. Актуальный список — `list_decisions`."
+            i18n._("Код, противоречащий этим решениям, — легаси, а не эталон. Актуальный список — `list_decisions`.")
         )
         for d in decisions[:40]:
             arch_body_parts.append(f"- **{d.topic}**: {d.text[:600]}")
         arch_body_parts.append("")
     how_to = overview.get("how_to") or {}
     if how_to:
-        arch_body_parts.append("## Как работать с проектом")
+        arch_body_parts.append(i18n._("## Как работать с проектом"))
         for k, label in (("run", "Запуск"), ("test", "Тесты"), ("migrate", "Миграции"), ("deploy", "Деплой")):
             if how_to.get(k):
-                arch_body_parts.append(f"- **{label}**: {how_to[k]}")
+                arch_body_parts.append(f"- **{i18n._(label)}**: {how_to[k]}")
         arch_body_parts.append("")
     arch_body_parts.append(
-        "Актуальные детали ищи в карте знаний: инструменты `graph_search`, `graph_cypher`, "
-        "`project_overview` MCP-сервера projectai."
+        i18n._("Актуальные детали ищи в карте знаний: инструменты `graph_search`, `graph_cypher`, `project_overview` MCP-сервера projectai.")
     )
 
     d = skills_dir / "architecture"
@@ -173,7 +173,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     (d / "SKILL.md").write_text(
         _skill(
             "architecture",
-            f"Архитектура, компоненты и конвенции проекта «{project.name}». Используй при любых вопросах об устройстве проекта.",
+            i18n._("Архитектура, компоненты и конвенции проекта «{name}». Используй при любых вопросах об устройстве проекта.").format(name=project.name),
             "\n".join(arch_body_parts),
         ),
         encoding="utf-8",
@@ -183,16 +183,16 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     comps = overview.get("components") or []
     if comps:
         body = [
-            f"# Сервисы и компоненты «{project.name}»",
+            i18n._("# Сервисы и компоненты «{name}»").format(name=project.name),
             "",
-            "За деталями по компоненту — MCP `component_info(name)`; по файлу — `file_info(path)`.",
+            i18n._("За деталями по компоненту — MCP `component_info(name)`; по файлу — `file_info(path)`."),
             "",
         ]
         for c in comps[:40]:
             body += [
                 f"## {c.get('name')} ({c.get('kind', 'module')})",
                 c.get("summary", ""),
-                "Ключевые файлы: " + ", ".join(c.get("paths", [])[:12]),
+                i18n._("Ключевые файлы: ") + ", ".join(c.get("paths", [])[:12]),
                 "",
             ]
         d = skills_dir / "services"
@@ -200,7 +200,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
         (d / "SKILL.md").write_text(
             _skill(
                 "services",
-                f"Сервисы и компоненты проекта «{project.name}»: за что каждый отвечает, ключевые файлы. Используй при вопросах «где реализовано X».",
+                i18n._("Сервисы и компоненты проекта «{name}»: за что каждый отвечает, ключевые файлы. Используй при вопросах «где реализовано X».").format(name=project.name),
                 "\n".join(body),
             ),
             encoding="utf-8",
@@ -208,7 +208,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
 
     features = overview.get("business_logic") or []
     if features:
-        body = [f"# Бизнес-логика «{project.name}»", ""]
+        body = [i18n._("# Бизнес-логика «{name}»").format(name=project.name), ""]
         for f in features[:40]:
             body += [f"## {f.get('name')}", f.get("summary", ""), ""]
         d = skills_dir / "business-logic"
@@ -216,7 +216,7 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
         (d / "SKILL.md").write_text(
             _skill(
                 "business-logic",
-                f"Бизнес-фичи проекта «{project.name}»: как они работают с точки зрения продукта и кода.",
+                i18n._("Бизнес-фичи проекта «{name}»: как они работают с точки зрения продукта и кода.").format(name=project.name),
                 "\n".join(body),
             ),
             encoding="utf-8",
@@ -227,33 +227,8 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     (d / "SKILL.md").write_text(
         _skill(
             "project-workflow",
-            "Рабочий процесс задач проекта: канбан, фиксация сделанного и решений, обновление карты знаний. Используй при работе над задачами.",
-            f"""# Рабочий процесс проекта «{project.name}»
-
-Проект подключён к системе «Проекты ИИ» (карта знаний + канбан). Доступны MCP-инструменты сервера `projectai`:
-
-## Перед началом работы
-1. `task_list` — посмотри доску задач (planned / in_progress / review / done).
-2. `project_overview`, `graph_search` — изучи контекст по карте знаний, не читая весь код.
-3. `list_decisions` — актуальные соглашения: код, противоречащий им, — легаси, а не эталон.
-4. Тяжёлая или мутная задача — сначала разбор (скилл `task-briefing`).
-
-## Во время работы
-- Возьми задачу: `task_move` в `in_progress`.
-- Новые обнаруженные задачи создавай через `task_create`; мутные — с `enrich=true`.
-- Уточняй описания через `task_update`.
-
-## Соглашения — ОБЯЗАТЕЛЬНО
-Пользователь поправил понимание проекта («это не баг, мы сменили подход», «роль X
-упразднили») — сразу фиксируй через `record_decision(topic, text)`. Совпадающая тема
-обновляется. Без этого каждая будущая проработка снова назовёт смену подхода багом.
-
-## После работы — ОБЯЗАТЕЛЬНО
-- `task_done(task_id, report, files)` — пометь задачу выполненной с отчётом и списком изменённых файлов.
-- Если работа вне задачи — `log_work(description, files)`.
-Отчёты копятся и попадают в карту знаний при следующем обновлении индекса
-(кнопка «⟳ Индекс» в приложении или `request_reindex`, если он включён для плагина).
-""",
+            i18n._("Рабочий процесс задач проекта: канбан, фиксация сделанного и решений, обновление карты знаний. Используй при работе над задачами."),
+            i18n.text("skill_workflow_body").format(name=project.name),
         ),
         encoding="utf-8",
     )
@@ -265,25 +240,8 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     (d / "SKILL.md").write_text(
         _skill(
             "task-briefing",
-            "Разбор тяжёлой или мутно сформулированной задачи: RLM-досье — где смотреть, нюансы, как проверить. Используй ПЕРЕД тем, как браться за такую задачу.",
-            f"""# Разбор задачи через RLM («{project.name}»)
-
-Когда задача большая, мутная или сформулирована «своими словами с созвона» — не бросайся
-делать. Система разберёт её по реальной кодовой базе и соберёт досье:
-как понята задача, гипотеза, **где смотреть** (файлы + что в них проверить), образец
-рядом, **нюансы** (что заденет работа), **как проверить** и развилки, которые должен
-решить человек. Досье не предписывает решение — как делать, решаешь ты.
-
-## Как
-1. Новая задача: `task_create(title, description, enrich=true)` — заводится на доске
-   и уходит в разбор. Существующая: `task_enrich(task_id)`.
-2. Разбор идёт в фоне минуты (RLM-исследование кодовой базы). Займись другим или подожди.
-3. `task_get(task_id)` — забери досье (поля extra: reading, hypothesis, where_to_look,
-   reference, impact, how_to_verify, open_questions). Если `extra.enriched` ещё нет —
-   разбор не закончился.
-4. Развилки из open_questions реши с пользователем ДО начала работы.
-5. Работай от досье: места и нюансы уже найдены, план строишь сам.
-""",
+            i18n._("Разбор тяжёлой или мутно сформулированной задачи: RLM-досье — где смотреть, нюансы, как проверить. Используй ПЕРЕД тем, как браться за такую задачу."),
+            i18n.text("skill_briefing_body").format(name=project.name),
         ),
         encoding="utf-8",
     )
@@ -293,29 +251,8 @@ async def generate_plugin(project_id: uuid.UUID) -> str:
     (d / "SKILL.md").write_text(
         _skill(
             "how-to-search",
-            "Как искать по проекту: когда graph_search, когда rlm_query, когда file_info/component_info. Используй, когда нужно что-то найти или понять в кодовой базе.",
-            f"""# Как искать по «{project.name}»
-
-Порядок — от дешёвого к дорогому; не читай десятки файлов в свой контекст.
-
-1. **Знаешь, что ищешь по названию/смыслу** → `graph_search(query)` — гибридный поиск
-   (полнотекст + семантика) по файлам, сущностям, компонентам, документам, задачам,
-   соглашениям. Начинай почти всегда с него.
-2. **Нужно досье конкретного места** → `file_info(path)` — роль файла, сущности, связи,
-   задачи и работы по нему; `component_info(name)` — за что отвечает компонент и его
-   ключевые файлы.
-3. **Вопрос структурный** («какие эндпоинты без тестов», «кто импортирует X») →
-   `graph_cypher` — read-only Cypher по графу (Project, File, Entity, Component,
-   Document, Task, WorkLog; $pid уже передан).
-4. **Вопрос широкий, ответ размазан по многим файлам** («как устроена авторизация»,
-   «что сломается, если поменять Y») → `rlm_query(question, paths?)` — под-агент
-   прочитает файлы и вернёт ответ, не засоряя твой контекст. paths можно не задавать —
-   система сама спланирует группы по карте знаний.
-5. **Что было решено людьми** (не кодом) → `list_decisions`; материалы созвонов и ТЗ →
-   `list_documents` + `read_document`.
-
-Точечное чтение файлов инструментом Read — после того, как места найдены, а не вместо поиска.
-""",
+            i18n._("Как искать по проекту: когда graph_search, когда rlm_query, когда file_info/component_info. Используй, когда нужно что-то найти или понять в кодовой базе."),
+            i18n.text("skill_search_body").format(name=project.name),
         ),
         encoding="utf-8",
     )
@@ -369,7 +306,7 @@ def _refresh_marketplace() -> None:
         json.dumps(
             {
                 "name": "projectai",
-                "owner": {"name": "Проекты ИИ"},
+                "owner": {"name": i18n._("Проекты ИИ")},
                 "plugins": entries,
             },
             ensure_ascii=False,
@@ -453,7 +390,7 @@ def plugin_install_info(project: Project) -> dict:
         "local_settings": local_settings_snippet(project),
         "installed_locally": _has_local_install(project),
         "skills": skills,
-        "mcp_tools": MCP_TOOLS_INFO,
+        "mcp_tools": [{**t, "description": i18n._(t["description"])} for t in MCP_TOOLS_INFO],
     }
 
 
@@ -504,9 +441,9 @@ def install_locally(project: Project) -> dict:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            raise ValueError(f"{path} — не читается как JSON: {e}")
+            raise ValueError(i18n._("{path} — не читается как JSON: {error}").format(path=path, error=e))
         if not isinstance(data, dict):
-            raise ValueError(f"{path} — ожидался объект JSON")
+            raise ValueError(i18n._("{path} — ожидался объект JSON").format(path=path))
 
     snippet = local_settings_snippet(project)
     markets = dict(data.get("extraKnownMarketplaces") or {})
@@ -529,7 +466,7 @@ def uninstall_locally(project: Project) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        raise ValueError(f"{path} — не читается как JSON: {e}")
+        raise ValueError(i18n._("{path} — не читается как JSON: {error}").format(path=path, error=e))
 
     key = f"{plugin_slug(project)}@projectai"
     removed = bool((data.get("enabledPlugins") or {}).pop(key, None))

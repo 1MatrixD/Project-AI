@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import get_current_user
+from .. import i18n
 
 log = logging.getLogger("projectai.api.fs")
 
@@ -37,7 +38,7 @@ async def drives() -> list[str]:
 async def list_dir(path: str) -> dict:
     p = Path(path)
     if not p.is_dir():
-        raise HTTPException(status_code=400, detail="Каталог не существует")
+        raise HTTPException(status_code=400, detail=i18n._("Каталог не существует"))
     dirs = []
     try:
         for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
@@ -51,7 +52,7 @@ async def list_dir(path: str) -> dict:
                 continue
             dirs.append({"name": name, "path": str(child)})
     except PermissionError:
-        raise HTTPException(status_code=403, detail="Нет доступа к каталогу")
+        raise HTTPException(status_code=403, detail=i18n._("Нет доступа к каталогу"))
     parent = str(p.parent) if p.parent != p else None
     return {"path": str(p), "parent": parent, "dirs": dirs[:500]}
 
@@ -110,12 +111,12 @@ async def pick_dir(body: dict | None = None) -> dict:
     свой DirPicker.
     """
     if os.name != "nt":
-        raise HTTPException(status_code=501, detail="Системный диалог доступен только на Windows")
+        raise HTTPException(status_code=501, detail=i18n._("Системный диалог доступен только на Windows"))
     ps = _powershell_bin()
     if ps is None:
-        raise HTTPException(status_code=501, detail="PowerShell не найден")
+        raise HTTPException(status_code=501, detail=i18n._("PowerShell не найден"))
     if _pick_lock.locked():
-        raise HTTPException(status_code=409, detail="Диалог выбора каталога уже открыт")
+        raise HTTPException(status_code=409, detail=i18n._("Диалог выбора каталога уже открыт"))
 
     initial = str((body or {}).get("initial") or "").strip()
     if not Path(initial).is_dir():
@@ -135,16 +136,16 @@ async def pick_dir(body: dict | None = None) -> dict:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=PICK_TIMEOUT_SEC)
         except asyncio.TimeoutError:
             proc.kill()
-            raise HTTPException(status_code=504, detail="Диалог выбора каталога не закрыли вовремя")
+            raise HTTPException(status_code=504, detail=i18n._("Диалог выбора каталога не закрыли вовремя"))
 
     if proc.returncode != 0:
         detail = err.decode("utf-8", "replace").strip()[:300]
         log.warning("Системный диалог не открылся (%s): %s", ps, detail)
-        raise HTTPException(status_code=501, detail=f"Системный диалог недоступен: {detail}")
+        raise HTTPException(status_code=501, detail=i18n._("Системный диалог недоступен: {detail}").format(detail=detail))
 
     path = out.decode("utf-8", "replace").strip()
     if not path:
         return {"path": None, "cancelled": True}
     if not Path(path).is_dir():
-        raise HTTPException(status_code=400, detail=f"Каталог не найден: {path}")
+        raise HTTPException(status_code=400, detail=i18n._("Каталог не найден: {path}").format(path=path))
     return {"path": str(Path(path).resolve()), "cancelled": False}

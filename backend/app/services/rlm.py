@@ -8,9 +8,11 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import select
 
 from ..config import get_settings
+from .. import i18n
 from ..db import get_sessionmaker
 from ..models import Project, ProjectFile
 from . import claude_cli, graphdb, roots
+from .prompts import localized
 
 log = logging.getLogger("projectai.rlm")
 
@@ -153,13 +155,13 @@ async def sub_query(
     «НУЖНО УТОЧНИТЬ», и по каждому вопросу запустится своё исследование."""
     s = get_settings()
     files = "\n".join(f"- {roots.fs_path_for_prompt(project, p)}" for p in paths[:30])
-    prompt = SUB_PROMPT.format(question=question, files=files)
+    prompt = localized(SUB_PROMPT).format(question=question, files=files)
     if followup_limit > 0:
         prompt += SUB_FOLLOWUP_TAIL.format(marker=FOLLOWUP_MARKER, limit=followup_limit)
     data = await claude_cli.run_prompt(
         prompt,
         cwd=project.root_path,
-        system=SUB_SYSTEM,
+        system=localized(SUB_SYSTEM),
         tools=["Read", "Grep", *GIT_TOOLS],
         model=model or s.ai_model,
         reasoning="low",
@@ -208,7 +210,7 @@ async def answer(
 
     if paths:
         # пользователь сам ограничил область — один под-вызов
-        await stage(0.2, f"читаю файлы: {len(paths)}")
+        await stage(0.2, i18n._("читаю файлы: {count}").format(count=len(paths)))
         result = await sub_query(project, question, paths)
         return {"answer": result, "sub_queries": [{"focus": question, "paths": paths}]}
 
@@ -222,7 +224,7 @@ async def answer(
         for f in found
     ) or "(ничего не найдено)"
 
-    plan_prompt = ROOT_PLAN_PROMPT.format(
+    plan_prompt = localized(ROOT_PLAN_PROMPT).format(
         project_name=project.name,
         question=question,
         graph_context=graph_context,
@@ -252,9 +254,9 @@ async def answer(
 
     if not groups:
         # запасной путь: один агент с обычными инструментами
-        await stage(0.25, "план не построен — отвечает один агент")
+        await stage(0.25, i18n._("план не построен — отвечает один агент"))
         data = await claude_cli.run_prompt(
-            f"Вопрос по проекту: {question}\nОтветь конкретно, по-русски, со ссылками на файлы.",
+            localized("Вопрос по проекту: {question}\nОтветь конкретно, по-русски, со ссылками на файлы.").format(question=question),
             cwd=project.root_path,
             system=f"Контекст проекта:\n{graph_context}",
             tools=["Read", "Grep", "Glob", *GIT_TOOLS],
@@ -264,7 +266,7 @@ async def answer(
         )
         return {"answer": str(data.get("result", "")), "sub_queries": []}
 
-    await stage(0.15, f"план готов, групп файлов: {len(groups)}")
+    await stage(0.15, i18n._("план готов, групп файлов: {count}").format(count=len(groups)))
 
     sem = _sem or asyncio.Semaphore(s.ai_concurrency)
     finished = 0
@@ -293,7 +295,7 @@ async def answer(
             if asked:
                 await stage(
                     0.15 + 0.70 * (finished / len(groups)),
-                    f"углубляюсь на уровень {_depth + 2}: вопросов — {len(asked)}",
+                    i18n._("углубляюсь на уровень {level}: вопросов — {count}").format(level=_depth + 2, count=len(asked)),
                 )
                 deeper = await asyncio.gather(
                     *(
@@ -318,25 +320,25 @@ async def answer(
             finished += 1
             value = 0.15 + 0.70 * finished / len(groups)
             seen = finished
-        await stage(value, f"под-агенты: {seen}/{len(groups)} — {focus[:60]}")
+        await stage(value, i18n._("под-агенты: {done}/{total} — {focus}").format(done=seen, total=len(groups), focus=focus[:60]))
         return {"focus": focus, "paths": paths_g, "answer": ans}
 
     subs = await asyncio.gather(*(run_group(g) for g in groups))
 
-    await stage(0.9, "свожу ответы под-агентов")
+    await stage(0.9, i18n._("свожу ответы под-агентов"))
 
     sub_answers = "\n\n".join(
         f"### Группа: {s_['focus']}\nФайлы: {', '.join(s_['paths'])}\n{s_['answer']}" for s_ in subs
     )
     try:
         synth = await claude_cli.run_prompt(
-            ROOT_SYNTH_PROMPT.format(
+            localized(ROOT_SYNTH_PROMPT).format(
                 project_name=project.name,
                 question=question,
                 graph_context=graph_context,
                 sub_answers=sub_answers[:60000],
             ),
-            system=ROOT_SYNTH_SYSTEM,
+            system=localized(ROOT_SYNTH_SYSTEM),
             tools=[],
             model=s.ai_model,
             # факты уже собраны под-агентами, синтезу остаётся их свести:

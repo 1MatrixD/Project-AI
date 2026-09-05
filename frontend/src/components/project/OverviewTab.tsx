@@ -2,21 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { API_URL, api, fmtDate, getToken } from "@/lib/api";
+import { useTranslations } from "next-intl";
+import { API_URL, api, getToken, langHeaders } from "@/lib/api";
+import { useFmt } from "@/lib/format";
 import { pickDirNative } from "@/lib/pickDir";
 import type { ChangeReport, Job, Project } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import DirPicker from "@/components/DirPicker";
-
-const KIND_LABELS: Record<string, string> = {
-  code: "код",
-  config: "конфиги",
-  doc: "документы",
-  test: "тесты",
-  asset: "ассеты",
-  data: "данные",
-  other: "прочее",
-};
 
 export default function OverviewTab({
   project,
@@ -27,6 +19,11 @@ export default function OverviewTab({
   jobs: Job[];
   onAction: () => void;
 }) {
+  const t = useTranslations("overview");
+  const tCommon = useTranslations("common");
+  // подсказка кнопки индекса общая с шапкой проекта
+  const tLayout = useTranslations("layout");
+  const fmt = useFmt();
   const [changes, setChanges] = useState<ChangeReport[]>([]);
   const [error, setError] = useState("");
   const [showGitImport, setShowGitImport] = useState(false);
@@ -68,7 +65,7 @@ export default function OverviewTab({
       onAction();
     } catch (e) {
       setWatch(!v);
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
   async function addRoot(path: string) {
@@ -81,7 +78,7 @@ export default function OverviewTab({
       });
       onAction();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
 
@@ -93,18 +90,18 @@ export default function OverviewTab({
       if (p === "unsupported") setShowRootPicker(true);
       else if (p) await addRoot(p);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
 
   async function removeRoot(alias: string) {
-    if (!confirm(`Убрать каталог «${alias}» из проекта? Его файлы удалятся из карты знаний.`)) return;
+    if (!confirm(t("removeRootConfirm", { alias }))) return;
     setError("");
     try {
       await api(`/projects/${project.id}/roots/${encodeURIComponent(alias)}`, { method: "DELETE" });
       onAction();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
 
@@ -119,7 +116,7 @@ export default function OverviewTab({
 
   async function runIndex(mode: "update" | "reverify") {
     setError("");
-    if (mode === "reverify" && !confirm("Перепроверить весь проект заново? Все файлы будут переанализированы ИИ.")) return;
+    if (mode === "reverify" && !confirm(t("reverifyConfirm"))) return;
     try {
       // ручной запуск: ретраим упавшие файлы; при включённой галке гоним бэклог до конца
       await api(`/projects/${project.id}/index`, {
@@ -128,7 +125,7 @@ export default function OverviewTab({
       });
       onAction();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
 
@@ -136,21 +133,23 @@ export default function OverviewTab({
     setError("");
     try {
       const res = await fetch(`${API_URL}/api/projects/${project.id}/export/markdown`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
+        headers: { Authorization: `Bearer ${getToken()}`, ...langHeaders() },
       });
-      if (!res.ok) throw new Error("Экспорт не удался");
+      if (!res.ok) throw new Error(t("exportFailed"));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${project.name.replace(/[^\wа-яё -]/gi, "").trim() || "проект"} — карта знаний.md`;
+      const safeName = project.name.replace(/[^\wа-яё -]/gi, "").trim() || t("exportDefaultName");
+      a.download = t("exportFileName", { name: safeName });
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
   }
 
+  const kindLabel = (k: string) => (t.has(`kinds.${k}`) ? t(`kinds.${k}`) : k);
   const lastJob = jobs.find((j) => j.type === "index");
 
   return (
@@ -158,18 +157,18 @@ export default function OverviewTab({
       <div className="lg:col-span-2 space-y-4">
         <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="font-medium">О проекте</div>
+            <div className="font-medium">{t("about")}</div>
             <div className="flex gap-1.5 items-center relative">
               <button
                 className="btn btn-ghost text-sm"
-                title="Просканировать изменения и продолжить ИИ-анализ"
+                title={tLayout("indexTitle")}
                 onClick={() => runIndex("update")}
               >
-                ⟳ Обновить индекс
+                {t("updateIndex")}
               </button>
               <button
                 className="btn btn-ghost text-sm px-2.5"
-                title="Ещё действия"
+                title={tCommon("moreActions")}
                 onClick={() => setShowMenu((v) => !v)}
               >
                 ⋯
@@ -180,7 +179,7 @@ export default function OverviewTab({
                   <div className="absolute right-0 top-full mt-1.5 z-40 card p-1.5 w-72 shadow-xl space-y-0.5">
                     <label
                       className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer select-none"
-                      title="Иначе за один прогон анализируется ограниченная порция файлов"
+                      title={t("autoContinueTitle")}
                     >
                       <input
                         type="checkbox"
@@ -189,15 +188,13 @@ export default function OverviewTab({
                         onChange={(e) => toggleAutoContinue(e.target.checked)}
                       />
                       <span className="text-sm">
-                        Анализ до конца бэклога
-                        <span className="block text-[11px] text-[var(--muted)]">
-                          продолжать порциями, пока все файлы не проанализированы
-                        </span>
+                        {t("autoContinue")}
+                        <span className="block text-[11px] text-[var(--muted)]">{t("autoContinueHint")}</span>
                       </span>
                     </label>
                     <label
                       className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer select-none"
-                      title="Работает, пока запущен сервер; состояние сохраняется"
+                      title={t("watchTitle")}
                     >
                       <input
                         type="checkbox"
@@ -206,10 +203,8 @@ export default function OverviewTab({
                         onChange={(e) => toggleWatch(e.target.checked)}
                       />
                       <span className="text-sm">
-                        Наблюдение за каталогом
-                        <span className="block text-[11px] text-[var(--muted)]">
-                          правки в коде сами запускают обновление индекса
-                        </span>
+                        {t("watch")}
+                        <span className="block text-[11px] text-[var(--muted)]">{t("watchHint")}</span>
                       </span>
                     </label>
                     <div className="border-t border-[var(--border)] my-1" />
@@ -217,31 +212,29 @@ export default function OverviewTab({
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setShowMenu(false); runIndex("reverify"); }}
                     >
-                      ⟲ Перепроверить всё
-                      <span className="block text-[11px] text-[var(--muted)]">полный пере-анализ всех файлов ИИ</span>
+                      {t("reverify")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("reverifyHint")}</span>
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setShowMenu(false); setShowGitImport(true); }}
                     >
-                      ⎇ Импорт из git
-                      <span className="block text-[11px] text-[var(--muted)]">история коммитов → задачи канбана</span>
+                      {t("gitImport")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("gitImportHint")}</span>
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setShowMenu(false); browseRoot(); }}
                     >
-                      🗂 Добавить каталог
-                      <span className="block text-[11px] text-[var(--muted)]">
-                        мультирепо: например, отдельный репозиторий бэкенда
-                      </span>
+                      {t("addRoot")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("addRootHint")}</span>
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setShowMenu(false); downloadExport(); }}
                     >
-                      ⬇ Экспорт карты знаний
-                      <span className="block text-[11px] text-[var(--muted)]">скачать одним markdown-файлом</span>
+                      {t("export")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("exportHint")}</span>
                     </button>
                   </div>
                 </>
@@ -252,9 +245,7 @@ export default function OverviewTab({
           {overview?.summary ? (
             <p className="text-sm leading-relaxed whitespace-pre-wrap">{overview.summary}</p>
           ) : (
-            <p className="text-sm text-[var(--muted)]">
-              Обзор появится после первичной индексации (ИИ-анализ файлов и синтез).
-            </p>
+            <p className="text-sm text-[var(--muted)]">{t("noOverview")}</p>
           )}
           <div className="flex gap-2 flex-wrap">
             {(project.meta.detect?.project_kinds ?? []).map((k) => (
@@ -266,16 +257,14 @@ export default function OverviewTab({
           </div>
           {extraRoots.length > 0 && (
             <div className="space-y-1.5 pt-1 border-t border-[var(--border)]">
-              <div className="text-xs text-[var(--muted)] pt-2">
-                Дополнительные каталоги (их файлы ходят с префиксом «алиас/»):
-              </div>
+              <div className="text-xs text-[var(--muted)] pt-2">{t("extraRoots")}</div>
               {extraRoots.map((r) => (
                 <div key={r.alias} className="flex items-center gap-2 text-xs group min-w-0">
                   <span className="chip shrink-0">{r.alias}/</span>
                   <span className="font-mono text-[var(--muted)] truncate">{r.path}</span>
                   <button
                     className="text-[var(--muted)] hover:text-red-300 opacity-0 group-hover:opacity-100 shrink-0"
-                    title="Убрать каталог из проекта"
+                    title={t("removeRoot")}
                     onClick={() => removeRoot(r.alias)}
                   >
                     ✕
@@ -288,7 +277,7 @@ export default function OverviewTab({
 
         {overview?.components?.length ? (
           <div className="card p-5 space-y-3">
-            <div className="font-medium">Компоненты</div>
+            <div className="font-medium">{t("components")}</div>
             <div className="grid gap-3 sm:grid-cols-2">
               {overview.components.map((c) => (
                 <div key={c.name} className="border border-[var(--border)] rounded-lg p-3 space-y-1">
@@ -304,7 +293,7 @@ export default function OverviewTab({
 
         {overview?.business_logic?.length ? (
           <div className="card p-5 space-y-3">
-            <div className="font-medium">Бизнес-логика</div>
+            <div className="font-medium">{t("businessLogic")}</div>
             {overview.business_logic.map((f) => (
               <div key={f.name} className="border-l-2 border-[var(--accent)] pl-3 space-y-0.5">
                 <div className="text-sm font-medium">{f.name}</div>
@@ -316,11 +305,9 @@ export default function OverviewTab({
 
         {overview?.conventions ? (
           <div className="card p-5 space-y-2">
-            <div className="font-medium">Конвенции</div>
+            <div className="font-medium">{t("conventions")}</div>
             <div className="text-xs text-[var(--muted)] leading-relaxed">
-              Как код написан <b>по факту</b>: ИИ вывел это сам при индексации, руками не
-              правится и перезаписывается на каждом прогоне. То, о чём <b>договорились</b>,
-              — на странице «Соглашения».
+              {t.rich("conventionsHint", { b: (chunks) => <b>{chunks}</b> })}
             </div>
             <p className="text-sm text-[var(--muted)] whitespace-pre-wrap leading-relaxed">{overview.conventions}</p>
           </div>
@@ -332,37 +319,40 @@ export default function OverviewTab({
           href={`/projects/${project.id}/decisions`}
           className="card p-5 block hover:border-[var(--accent)] transition-colors space-y-1"
         >
-          <div className="font-medium">Соглашения проекта →</div>
-          <div className="text-xs text-[var(--muted)] leading-relaxed">
-            Актуальные решения и смены подходов — то, чего в коде не прочитать.
-            Пишут человек и ИИ (record_decision); учитываются в каждой проработке
-            и проверке.
-          </div>
+          <div className="font-medium">{t("decisionsLink")}</div>
+          <div className="text-xs text-[var(--muted)] leading-relaxed">{t("decisionsHint")}</div>
         </Link>
         <div className="card p-5 space-y-3">
-          <div className="font-medium">Статистика</div>
+          <div className="font-medium">{t("stats")}</div>
           {stats ? (
             <>
               <div className="text-sm">
-                Файлов: <b>{stats.files_total}</b>, проанализировано ИИ: <b>{stats.analyzed}</b>
+                {t.rich("statsFiles", {
+                  total: stats.files_total,
+                  analyzed: stats.analyzed,
+                  b: (chunks) => <b>{chunks}</b>,
+                })}
               </div>
               <div className="flex gap-2 flex-wrap">
                 {Object.entries(stats.by_kind).map(([k, v]) => (
-                  <span key={k} className="chip">{KIND_LABELS[k] ?? k}: {v}</span>
+                  <span key={k} className="chip">{kindLabel(k)}: {v}</span>
                 ))}
               </div>
             </>
           ) : (
-            <div className="text-sm text-[var(--muted)]">Ещё не сканировался</div>
+            <div className="text-sm text-[var(--muted)]">{t("notScanned")}</div>
           )}
           {graphStats?.nodes && (
             <div className="text-xs text-[var(--muted)]">
-              Граф: {Object.entries(graphStats.nodes).map(([k, v]) => `${k} ${v}`).join(", ")}; связей: {graphStats.relations}
+              {t("graphStats", {
+                nodes: Object.entries(graphStats.nodes).map(([k, v]) => `${k} ${v}`).join(", "),
+                relations: graphStats.relations ?? 0,
+              })}
             </div>
           )}
           {lastJob && (
             <div className="text-xs text-[var(--muted)] flex items-center gap-2">
-              Последняя индексация: <StatusBadge status={lastJob.status} /> {fmtDate(lastJob.created_at)}
+              {t("lastIndex")} <StatusBadge status={lastJob.status} /> {fmt.date(lastJob.created_at)}
             </div>
           )}
           {lastJob?.error && (
@@ -371,21 +361,23 @@ export default function OverviewTab({
         </div>
 
         <div className="card p-5 space-y-3">
-          <div className="font-medium">Что изменилось</div>
+          <div className="font-medium">{t("changes")}</div>
           {changes.length === 0 ? (
-            <div className="text-sm text-[var(--muted)]">Отчётов пока нет</div>
+            <div className="text-sm text-[var(--muted)]">{t("noChanges")}</div>
           ) : (
             changes.slice(0, 5).map((c) => (
               <div key={c.id} className="border border-[var(--border)] rounded-lg p-3 space-y-1">
                 <div className="flex justify-between text-xs text-[var(--muted)]">
-                  <span>{c.mode === "initial" ? "Первичный скан" : c.mode === "reverify" ? "Полная перепроверка" : "Обновление"}</span>
-                  <span>{fmtDate(c.created_at)}</span>
+                  <span>
+                    {c.mode === "initial" ? t("mode.initial") : c.mode === "reverify" ? t("mode.reverify") : t("mode.update")}
+                  </span>
+                  <span>{fmt.date(c.created_at)}</span>
                 </div>
                 <div className="text-sm">
                   <span className="text-emerald-300">+{c.stats.added}</span>{" "}
                   <span className="text-amber-300">~{c.stats.modified}</span>{" "}
                   <span className="text-red-300">−{c.stats.deleted}</span>{" "}
-                  <span className="text-[var(--muted)]">из {c.stats.total}</span>
+                  <span className="text-[var(--muted)]">{t("ofTotal", { total: c.stats.total })}</span>
                 </div>
                 {[...c.added.slice(0, 3), ...c.modified.slice(0, 3)].map((p) => (
                   <div key={p} className="text-xs font-mono text-[var(--muted)] truncate">{p}</div>
@@ -414,11 +406,11 @@ export default function OverviewTab({
 }
 
 const PERIODS = [
-  { days: 7, label: "Неделя" },
-  { days: 30, label: "Месяц" },
-  { days: 90, label: "3 месяца" },
-  { days: 0, label: "Вся история" },
-];
+  { days: 7, key: "week" },
+  { days: 30, key: "month" },
+  { days: 90, key: "quarter" },
+  { days: 0, key: "all" },
+] as const;
 
 type GitRepo = {
   path: string;
@@ -444,6 +436,8 @@ function GitImportModal({
   onClose: () => void;
   onStarted: () => void;
 }) {
+  const t = useTranslations("gitImport");
+  const tCommon = useTranslations("common");
   const [repos, setRepos] = useState<GitRepo[] | null>(null);
   const [configs, setConfigs] = useState<Record<string, RepoConfig>>({});
   const [error, setError] = useState("");
@@ -460,10 +454,10 @@ function GitImportModal({
         setConfigs(cfg);
       })
       .catch((e) => {
-        setError(e instanceof Error ? e.message : "Ошибка");
+        setError(e instanceof Error ? e.message : tCommon("error"));
         setRepos([]);
       });
-  }, [projectId]);
+  }, [projectId, tCommon]);
 
   function update(path: string, patch: Partial<RepoConfig>) {
     setConfigs((c) => ({ ...c, [path]: { ...c[path], ...patch } }));
@@ -490,7 +484,7 @@ function GitImportModal({
       });
       onStarted();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
       setBusy(false);
     }
   }
@@ -501,18 +495,13 @@ function GitImportModal({
         className="card w-full max-w-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="font-medium">Импорт истории git</div>
-        <div className="text-xs text-[var(--muted)] leading-relaxed">
-          Выбери репозитории и настрой каждый: ветка, период, лимит коммитов. ИИ сгруппирует
-          коммиты в выполненные работы: полностью совпадающие открытые задачи закроются,
-          частично сделанные получат галочки на шагах плана. Уже импортированные коммиты
-          пропускаются, свежие работы ложатся сверху колонки «Готово».
-        </div>
+        <div className="font-medium">{t("title")}</div>
+        <div className="text-xs text-[var(--muted)] leading-relaxed">{t("hint")}</div>
 
         {repos === null ? (
-          <div className="text-sm text-[var(--muted)]">Ищу репозитории…</div>
+          <div className="text-sm text-[var(--muted)]">{t("searching")}</div>
         ) : repos.length === 0 ? (
-          <div className="text-sm text-[var(--muted)]">Git-репозитории не найдены</div>
+          <div className="text-sm text-[var(--muted)]">{t("none")}</div>
         ) : (
           <div className="space-y-3">
             {repos.map((r) => {
@@ -534,17 +523,17 @@ function GitImportModal({
                     />
                     <div className="min-w-0">
                       <div className="text-sm font-mono font-medium truncate">
-                        {r.path === "." ? "(корень проекта)" : r.path}
+                        {r.path === "." ? t("rootRepo") : r.path}
                       </div>
                       <div className="text-xs text-[var(--muted)]">
-                        {r.total_commits} коммитов · последний: {r.last_commit || "—"}
+                        {t("commits", { count: r.total_commits, last: r.last_commit || "—" })}
                       </div>
                     </div>
                   </label>
                   {c.checked && (
                     <div className="flex gap-3 flex-wrap items-end pl-6">
                       <div className="space-y-1">
-                        <div className="text-[11px] text-[var(--muted)]">Ветка</div>
+                        <div className="text-[11px] text-[var(--muted)]">{t("branch")}</div>
                         <select
                           className="input !w-44 text-xs"
                           value={c.branch}
@@ -553,14 +542,14 @@ function GitImportModal({
                           {[r.current_branch, ...r.branches.filter((b) => b !== r.current_branch)].map(
                             (b) => (
                               <option key={b} value={b}>
-                                {b === r.current_branch ? `${b} (текущая)` : b}
+                                {b === r.current_branch ? t("current", { branch: b }) : b}
                               </option>
                             )
                           )}
                         </select>
                       </div>
                       <div className="space-y-1">
-                        <div className="text-[11px] text-[var(--muted)]">Период</div>
+                        <div className="text-[11px] text-[var(--muted)]">{t("period")}</div>
                         <div className="flex gap-1.5">
                           {PERIODS.map((p) => (
                             <button
@@ -573,13 +562,13 @@ function GitImportModal({
                                   : "hover:border-[var(--accent)]"
                               }`}
                             >
-                              {p.label}
+                              {t(`periods.${p.key}`)}
                             </button>
                           ))}
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <div className="text-[11px] text-[var(--muted)]">Лимит</div>
+                        <div className="text-[11px] text-[var(--muted)]">{t("limit")}</div>
                         <input
                           type="number"
                           className="input !w-24 text-xs"
@@ -599,13 +588,12 @@ function GitImportModal({
 
         {error && <div className="text-sm text-red-400">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn btn-ghost" onClick={onClose}>{tCommon("cancel")}</button>
           <button className="btn" onClick={start} disabled={busy || selectedCount === 0}>
-            {busy ? "…" : `Импортировать (${selectedCount})`}
+            {busy ? "…" : t("submit", { count: selectedCount })}
           </button>
         </div>
       </div>
     </div>
   );
 }
-

@@ -7,6 +7,7 @@ from typing import Any
 from neo4j import AsyncGraphDatabase
 
 from ..config import get_settings
+from .. import i18n
 
 log = logging.getLogger("projectai.graph")
 
@@ -544,7 +545,7 @@ async def run_readonly_cypher(project_id: str, query: str, limit: int = 100) -> 
     lowered = query.lower()
     for kw in ("create ", "merge ", "delete ", "set ", "remove ", "drop ", "load csv", "call db.", "call apoc.trigger", "call apoc.periodic"):
         if kw in lowered:
-            raise ValueError(f"Запрос отклонён: запись/административная операция ({kw.strip()})")
+            raise ValueError(i18n._("Запрос отклонён: запись/административная операция ({keyword})").format(keyword=kw.strip()))
     async with get_driver().session(default_access_mode="READ") as s:
         res = await s.run(query, pid=project_id)  # type: ignore[arg-type]
         out = []

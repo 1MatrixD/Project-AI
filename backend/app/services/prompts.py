@@ -1,5 +1,24 @@
 from __future__ import annotations
 
+from ..config import get_settings
+
+#: пометки языка ответа — единственная языковая привязка в шаблонах ниже.
+#: Сами инструкции остаются по-русски: модель их понимает, а фейковый claude
+#: в тестах узнаёт промпты по этим фразам.
+LANGUAGE_NOTE = {"ru": "по-русски", "en": "in English"}
+LANGUAGE_NAME = {"ru": "Russian", "en": "English"}
+
+
+def localized(template: str) -> str:
+    """Шаблон промпта с пометкой языка из настройки AI_LANGUAGE."""
+    lang = get_settings().ai_language.strip().lower()
+    if lang == "ru":
+        return template
+    note = LANGUAGE_NOTE.get(lang, LANGUAGE_NOTE["en"])
+    name = LANGUAGE_NAME.get(lang, LANGUAGE_NAME["en"])
+    return template.replace("по-русски", note).replace("Russian", name)
+
+
 #: сколько текста задачи уходит в промпты проработки и декомпозиции. Совпадает с
 #: потолком хранения description (8000): формулировку пользователя нельзя резать
 #: по дороге, иначе длинное ТЗ теряет как раз ту часть, ради которой его писали.
@@ -381,6 +400,7 @@ def build_chat_system_prompt(
         else ""
     )
     roots_block = f"\n{roots_note}" if roots_note else ""
+    language_rule = localized("6. Отвечай по-русски, конкретно, со ссылками на файлы.")
     return f"""Ты — ИИ-ассистент проекта «{project_name}» в системе «Проекты ИИ».
 Корневой каталог кода проекта: {root_path} (это твой текущий рабочий каталог).{roots_block}{decisions_block}
 
@@ -408,7 +428,7 @@ def build_chat_system_prompt(
    «роль X упразднили») — сразу зафиксируй это через record_decision, чтобы все будущие
    проработки и проверки это учитывали. При сомнении «баг или смена подхода» — сверься с
    list_decisions и git-историей файла.
-6. Отвечай по-русски, конкретно, со ссылками на файлы.
+{language_rule}
 
 Контекст из карты знаний:
 {graph_context}"""

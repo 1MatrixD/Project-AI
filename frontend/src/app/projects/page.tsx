@@ -3,14 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, setToken, fmtDate } from "@/lib/api";
+import { useTranslations } from "next-intl";
+import { api, setToken } from "@/lib/api";
+import { useFmt } from "@/lib/format";
 import { pickDirNative } from "@/lib/pickDir";
 import type { Project } from "@/lib/types";
 import DirPicker from "@/components/DirPicker";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import StatusBadge from "@/components/StatusBadge";
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const t = useTranslations("projects");
+  const tApp = useTranslations("app");
+  const tCommon = useTranslations("common");
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -49,7 +55,7 @@ export default function ProjectsPage() {
       if (p === "unsupported") setShowPicker(true);
       else if (p) applyPath(p);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка");
+      setError(err instanceof Error ? err.message : tCommon("error"));
     } finally {
       setPicking(false);
     }
@@ -66,7 +72,7 @@ export default function ProjectsPage() {
       });
       router.push(`/projects/${p.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка");
+      setError(err instanceof Error ? err.message : tCommon("error"));
       setBusy(false);
     }
   }
@@ -75,10 +81,11 @@ export default function ProjectsPage() {
     <div className="flex-1 max-w-5xl w-full mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="text-xl font-semibold bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] bg-clip-text text-transparent">
-          Проекты ИИ
+          {tApp("title")}
         </div>
-        <div className="flex gap-2">
-          <button className="btn" onClick={() => setShowCreate(true)}>+ Новый проект</button>
+        <div className="flex gap-2 items-center">
+          <button className="btn" onClick={() => setShowCreate(true)}>{t("newProject")}</button>
+          <LanguageSwitcher />
           <button
             className="btn btn-ghost"
             onClick={() => {
@@ -86,21 +93,18 @@ export default function ProjectsPage() {
               router.replace("/login");
             }}
           >
-            Выйти
+            {t("logout")}
           </button>
         </div>
       </div>
 
       {projects === null ? (
-        <div className="text-[var(--muted)]">Загрузка…</div>
+        <div className="text-[var(--muted)]">{tCommon("loading")}</div>
       ) : projects.length === 0 ? (
         <div className="card p-10 text-center space-y-3">
-          <div className="text-lg">Пока нет проектов</div>
-          <div className="text-sm text-[var(--muted)]">
-            Создай проект, укажи каталог с кодом — и в фоне соберётся карта знаний:
-            архитектура, сервисы, бизнес-логика, связи файлов.
-          </div>
-          <button className="btn" onClick={() => setShowCreate(true)}>Создать первый проект</button>
+          <div className="text-lg">{t("empty.title")}</div>
+          <div className="text-sm text-[var(--muted)]">{t("empty.hint")}</div>
+          <button className="btn" onClick={() => setShowCreate(true)}>{t("empty.cta")}</button>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -113,11 +117,11 @@ export default function ProjectsPage() {
       {showCreate && (
         <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setShowCreate(false)}>
           <form onSubmit={create} className="card w-full max-w-lg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="font-medium text-lg">Новый проект</div>
-            <input className="input" required placeholder="Название" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="font-medium text-lg">{t("create.title")}</div>
+            <input className="input" required placeholder={t("create.name")} value={name} onChange={(e) => setName(e.target.value)} />
             <textarea
               className="input min-h-20"
-              placeholder="Описание (необязательно)"
+              placeholder={t("create.description")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -125,7 +129,7 @@ export default function ProjectsPage() {
               <input
                 className="input font-mono text-xs"
                 required
-                placeholder="Каталог проекта на диске"
+                placeholder={t("create.path")}
                 value={rootPath}
                 onChange={(e) => setRootPath(e.target.value)}
               />
@@ -134,19 +138,16 @@ export default function ProjectsPage() {
                 className="btn btn-ghost whitespace-nowrap"
                 onClick={browse}
                 disabled={picking}
-                title="Откроется системный диалог Windows"
+                title={t("create.browseTitle")}
               >
-                {picking ? "Диалог открыт…" : "Обзор…"}
+                {picking ? t("create.browsing") : t("create.browse")}
               </button>
             </div>
-            <div className="text-xs text-[var(--muted)]">
-              После создания в фоне запустится анализ проекта: структура, стек,
-              ИИ-разбор файлов и карта знаний в Neo4j.
-            </div>
+            <div className="text-xs text-[var(--muted)]">{t("create.hint")}</div>
             {error && <div className="text-sm text-red-400">{error}</div>}
             <div className="flex justify-end gap-2">
-              <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>Отмена</button>
-              <button className="btn" disabled={busy}>{busy ? "Создаю…" : "Создать и проанализировать"}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>{tCommon("cancel")}</button>
+              <button className="btn" disabled={busy}>{busy ? t("create.creating") : t("create.submit")}</button>
             </div>
           </form>
         </div>
@@ -176,36 +177,35 @@ function ProjectCard({
   onChanged: () => void;
   onError: (msg: string) => void;
 }) {
+  const t = useTranslations("projects.card");
+  const tCommon = useTranslations("common");
+  const fmt = useFmt();
   const [menu, setMenu] = useState(false);
   const [busy, setBusy] = useState("");
 
   async function duplicate() {
-    setBusy("Дублирую…");
+    setBusy(t("duplicating"));
     onError("");
     try {
       await api(`/projects/${p.id}/duplicate`, { method: "POST", body: JSON.stringify({}) });
       onChanged();
     } catch (e) {
-      onError(e instanceof Error ? e.message : "Ошибка");
+      onError(e instanceof Error ? e.message : tCommon("error"));
     } finally {
       setBusy("");
     }
   }
 
   async function remove() {
-    const ok = confirm(
-      `Удалить проект «${p.name}»?\n\n` +
-        "Удалятся карта знаний, задачи, чаты, материалы и соглашения. " +
-        "Каталог с кодом на диске останется нетронутым.\n\nОтменить будет нельзя."
-    );
+    const ok = confirm(t("confirmDelete", { name: p.name }));
     if (!ok) return;
-    setBusy("Удаляю…");
+    setBusy(t("deleting"));
     onError("");
     try {
       await api(`/projects/${p.id}`, { method: "DELETE" });
       onChanged();
     } catch (e) {
-      onError(e instanceof Error ? e.message : "Ошибка");
+      onError(e instanceof Error ? e.message : tCommon("error"));
       setBusy("");
     }
   }
@@ -223,7 +223,7 @@ function ProjectCard({
                 className="text-[var(--muted)] hover:text-[var(--foreground)] px-1.5 leading-none"
                 onClick={() => setMenu((v) => !v)}
                 disabled={!!busy}
-                title="Действия с проектом"
+                title={t("actions")}
               >
                 ⋯
               </button>
@@ -235,19 +235,15 @@ function ProjectCard({
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)]"
                       onClick={() => { setMenu(false); duplicate(); }}
                     >
-                      ⧉ Дублировать
-                      <span className="block text-[11px] text-[var(--muted)]">
-                        копия с готовой картой знаний — ИИ-анализ файлов не повторяется
-                      </span>
+                      {t("duplicate")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("duplicateHint")}</span>
                     </button>
                     <button
                       className="w-full text-left text-sm px-2.5 py-2 rounded-lg hover:bg-[var(--surface-2)] text-red-300"
                       onClick={() => { setMenu(false); remove(); }}
                     >
-                      Удалить проект
-                      <span className="block text-[11px] text-[var(--muted)]">
-                        каталог с кодом на диске не тронется
-                      </span>
+                      {t("delete")}
+                      <span className="block text-[11px] text-[var(--muted)]">{t("deleteHint")}</span>
                     </button>
                   </div>
                 </>
@@ -265,7 +261,7 @@ function ProjectCard({
           ))}
         </div>
         <div className="text-xs text-[var(--muted)]">
-          {busy || `Обновлён ${fmtDate(p.updated_at)}`}
+          {busy || t("updated", { date: fmt.date(p.updated_at) })}
         </div>
       </div>
     </div>

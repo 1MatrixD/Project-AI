@@ -3,11 +3,16 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api, setToken } from "@/lib/api";
 import type { User } from "@/lib/types";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
+  const t = useTranslations("auth");
+  const tApp = useTranslations("app");
+  const tCommon = useTranslations("common");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -28,7 +33,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
       setToken(res.token);
       router.replace("/projects");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка");
+      setError(err instanceof Error ? err.message : tCommon("error"));
     } finally {
       setBusy(false);
     }
@@ -36,19 +41,20 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   return (
     <div className="flex-1 flex items-center justify-center p-6">
-      <form onSubmit={submit} className="card w-full max-w-sm p-8 space-y-4">
+      <form onSubmit={submit} className="card w-full max-w-sm p-8 space-y-4 relative">
+        <LanguageSwitcher className="absolute top-3 right-3" />
         <div className="text-center space-y-1 mb-6">
           <div className="text-2xl font-semibold bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] bg-clip-text text-transparent">
-            Проекты ИИ
+            {tApp("title")}
           </div>
           <div className="text-sm text-[var(--muted)]">
-            {mode === "login" ? "Вход в систему" : "Регистрация"}
+            {mode === "login" ? t("loginSubtitle") : t("registerSubtitle")}
           </div>
         </div>
         {mode === "register" && (
           <input
             className="input"
-            placeholder="Имя"
+            placeholder={t("namePlaceholder")}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -57,7 +63,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
           className="input"
           type="email"
           required
-          placeholder="Email"
+          placeholder={t("emailPlaceholder")}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
@@ -66,27 +72,27 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
           type="password"
           required
           minLength={6}
-          placeholder="Пароль (мин. 6 символов)"
+          placeholder={t("passwordPlaceholder")}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
         {error && <div className="text-sm text-red-400">{error}</div>}
         <button className="btn w-full justify-center" disabled={busy}>
-          {busy ? "…" : mode === "login" ? "Войти" : "Создать аккаунт"}
+          {busy ? "…" : mode === "login" ? t("login") : t("register")}
         </button>
         <div className="text-center text-sm text-[var(--muted)]">
           {mode === "login" ? (
             <>
-              Нет аккаунта?{" "}
+              {t("noAccount")}{" "}
               <Link href="/register" className="text-[var(--accent)]">
-                Регистрация
+                {t("registerLink")}
               </Link>
             </>
           ) : (
             <>
-              Уже есть аккаунт?{" "}
+              {t("haveAccount")}{" "}
               <Link href="/login" className="text-[var(--accent)]">
-                Войти
+                {t("loginLink")}
               </Link>
             </>
           )}

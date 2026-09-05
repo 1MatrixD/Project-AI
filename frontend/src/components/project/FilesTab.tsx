@@ -1,20 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, fmtBytes } from "@/lib/api";
+import { useTranslations } from "next-intl";
+import { api } from "@/lib/api";
+import { useFmt } from "@/lib/format";
 import type { ProjectFile } from "@/lib/types";
 
 const KINDS = ["", "code", "config", "doc", "test", "data", "asset", "other"];
-const KIND_LABEL: Record<string, string> = {
-  "": "Все типы",
-  code: "Код",
-  config: "Конфиги",
-  doc: "Документы",
-  test: "Тесты",
-  data: "Данные",
-  asset: "Ассеты",
-  other: "Прочее",
-};
 
 const STATUS_ICON: Record<string, string> = {
   analyzed: "🟢",
@@ -24,6 +16,9 @@ const STATUS_ICON: Record<string, string> = {
 };
 
 export default function FilesTab({ projectId }: { projectId: string }) {
+  const t = useTranslations("files");
+  const tCommon = useTranslations("common");
+  const fmt = useFmt();
   const [items, setItems] = useState<ProjectFile[]>([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
@@ -43,8 +38,8 @@ export default function FilesTab({ projectId }: { projectId: string }) {
   }, [projectId, q, kind, offset]);
 
   useEffect(() => {
-    const t = setTimeout(load, 250);
-    return () => clearTimeout(t);
+    const timer = setTimeout(load, 250);
+    return () => clearTimeout(timer);
   }, [load]);
 
   return (
@@ -52,7 +47,7 @@ export default function FilesTab({ projectId }: { projectId: string }) {
       <div className="flex gap-2 flex-wrap">
         <input
           className="input !w-64"
-          placeholder="Поиск по пути и описанию…"
+          placeholder={t("search")}
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -61,19 +56,19 @@ export default function FilesTab({ projectId }: { projectId: string }) {
         />
         <select className="input !w-auto" value={kind} onChange={(e) => { setKind(e.target.value); setOffset(0); }}>
           {KINDS.map((k) => (
-            <option key={k} value={k}>{KIND_LABEL[k]}</option>
+            <option key={k} value={k}>{t(`kinds.${k || "all"}`)}</option>
           ))}
         </select>
-        <div className="chip self-center">{total} файлов</div>
+        <div className="chip self-center">{t("count", { count: total })}</div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-[var(--muted)] text-xs">
             <tr>
-              <th className="py-2 pr-3">Файл</th>
-              <th className="py-2 pr-3">Тип</th>
-              <th className="py-2 pr-3">Размер</th>
-              <th className="py-2">Роль (из ИИ-анализа)</th>
+              <th className="py-2 pr-3">{t("col.file")}</th>
+              <th className="py-2 pr-3">{t("col.kind")}</th>
+              <th className="py-2 pr-3">{t("col.size")}</th>
+              <th className="py-2">{t("col.role")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--border)]">
@@ -84,7 +79,7 @@ export default function FilesTab({ projectId }: { projectId: string }) {
                   {f.rel_path}
                 </td>
                 <td className="py-2 pr-3"><span className="chip">{f.kind}</span></td>
-                <td className="py-2 pr-3 text-[var(--muted)] whitespace-nowrap">{fmtBytes(f.size)}</td>
+                <td className="py-2 pr-3 text-[var(--muted)] whitespace-nowrap">{fmt.bytes(f.size)}</td>
                 <td className="py-2 text-[var(--muted)] text-xs max-w-xl">{f.summary ?? "—"}</td>
               </tr>
             ))}
@@ -93,10 +88,10 @@ export default function FilesTab({ projectId }: { projectId: string }) {
       </div>
       <div className="flex gap-2 justify-end text-sm">
         <button className="btn btn-ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
-          ← Назад
+          {tCommon("back")}
         </button>
         <button className="btn btn-ghost" disabled={offset + limit >= total} onClick={() => setOffset(offset + limit)}>
-          Вперёд →
+          {tCommon("forward")}
         </button>
       </div>
     </div>

@@ -4,6 +4,7 @@ import logging
 import threading
 
 from ..config import get_settings
+from .. import i18n
 
 log = logging.getLogger("projectai.transcribe")
 
@@ -26,7 +27,7 @@ def _load_model():
         try:
             from faster_whisper import WhisperModel
         except ImportError as e:
-            raise TranscribeError(f"faster-whisper не установлен: {e}")
+            raise TranscribeError(i18n._("faster-whisper не установлен: {error}").format(error=e))
 
         device = s.whisper_device
         compute = "int8"
@@ -51,7 +52,7 @@ def _load_model():
                 log.warning("CUDA не завелась (%s), падаю на CPU int8", e)
                 _model = WhisperModel(s.whisper_model, device="cpu", compute_type="int8")
             else:
-                raise TranscribeError(f"Не удалось загрузить модель whisper: {e}")
+                raise TranscribeError(i18n._("Не удалось загрузить модель whisper: {error}").format(error=e))
         _model_name = s.whisper_model
         return _model
 
@@ -72,7 +73,7 @@ def transcribe_file(path: str, language: str | None = None) -> dict:
             segments.append({"start": round(seg.start, 2), "end": round(seg.end, 2), "text": seg.text.strip()})
             texts.append(seg.text.strip())
     except Exception as e:
-        raise TranscribeError(f"Транскрибация не удалась: {e}")
+        raise TranscribeError(i18n._("Транскрибация не удалась: {error}").format(error=e))
 
     def fmt_ts(t: float) -> str:
         h, rem = divmod(int(t), 3600)

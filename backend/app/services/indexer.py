@@ -10,10 +10,12 @@ from sqlalchemy import delete, select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
+from .. import i18n
 from ..jobs_runner import JobCancelled, runner
 from ..models import ChangeReport, Project, ProjectFile, TaskItem, WorkLogEntry, utcnow
 from . import claude_cli, graphdb, roots, vectors
 from .prompts import (
+    localized,
     FILE_ANALYSIS_PROMPT,
     FILE_ANALYSIS_SYSTEM,
     SYNTHESIS_PROMPT,
@@ -171,8 +173,9 @@ async def _analyze_batch(project: Project, batch: list[ProjectFile]) -> dict:
     alias, _, root_abs = roots.split_rel(project, batch[0].rel_path)
     cut = len(alias) + 1 if alias else 0
     local = {f.id: f.rel_path[cut:] for f in batch}
-    file_list = "\n".join(f"- {local[f.id]} ({f.kind}, {f.size} байт)" for f in batch)
-    prompt = FILE_ANALYSIS_PROMPT.format(file_list=file_list)
+    unit = i18n._("байт")
+    file_list = "\n".join(f"- {local[f.id]} ({f.kind}, {f.size} {unit})" for f in batch)
+    prompt = localized(FILE_ANALYSIS_PROMPT).format(file_list=file_list)
     obj = meta = None
     for attempt in (1, 2):  # транзиентные сбои claude ретраим один раз
         try:
@@ -286,7 +289,7 @@ async def _run_ai_analysis(
         await runner.report(
             job_id,
             base_progress + span * (done_count / len(batches)),
-            f"ИИ-анализ файлов: батч {done_count}/{len(batches)}",
+            i18n._("ИИ-анализ файлов: батч {done}/{total}").format(done=done_count, total=len(batches)),
         )
 
     await asyncio.gather(*(run_one(b) for b in batches))
@@ -317,7 +320,7 @@ async def _run_synthesis(project: Project) -> dict | None:
         return None
     summaries = "\n".join(f"- {r.rel_path}: {(r.summary or '')[:160]}" for r in rows)[:16000]
     detect_info = json.dumps(project.meta.get("detect", {}), ensure_ascii=False)
-    prompt = SYNTHESIS_PROMPT.format(
+    prompt = localized(SYNTHESIS_PROMPT).format(
         project_name=project.name, detect_info=detect_info, file_summaries=summaries
     )
     try:
@@ -364,7 +367,7 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
     await _set_project(project_id, status="indexing")
 
     try:
-        await runner.report(job_id, 0.02, "Сканирование каталогов")
+        await runner.report(job_id, 0.02, i18n._("Сканирование каталогов"))
         known = await _load_known(project_id)
         force = mode == "reverify"
         scanned_by_root: list[tuple[str, str, list]] = []
@@ -376,7 +379,7 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
         diff = diff_scan(scanned, known)
         runner.check_cancelled(job_id)
 
-        await runner.report(job_id, 0.12, "Обновление реестра файлов")
+        await runner.report(job_id, 0.12, i18n._("Обновление реестра файлов"))
         await _apply_scan_to_db(project_id, diff)
         if diff.deleted:
             await vectors.delete(str(project_id), kind="file", keys=diff.deleted)
@@ -389,7 +392,7 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
                 )
                 await session.commit()
 
-        await runner.report(job_id, 0.2, "Синхронизация структуры в граф")
+        await runner.report(job_id, 0.2, i18n._("Синхронизация структуры в граф"))
         pid = str(project_id)
         detect = await asyncio.to_thread(_detect_all, scanned_by_root)
         meta = dict(project.meta)
@@ -421,13 +424,13 @@ async def index_project(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) 
             diff.added or diff.modified or diff.deleted
         )
         if s.ai_analysis_enabled and params.get("ai", True) and limit > 0 and not watch_noop:
-            await runner.report(job_id, 0.25, "ИИ-анализ файлов")
+            await runner.report(job_id, 0.25, i18n._("ИИ-анализ файлов"))
             ai_stats = await _run_ai_analysis(
                 job_id, project, limit, 0.25, 0.55, retry_errors=bool(params.get("retry_errors"))
             )
             runner.check_cancelled(job_id)
             if ai_stats["analyzed"] > 0 or not project.meta.get("overview"):
-                await runner.report(job_id, 0.85, "Синтез обзора проекта")
+                await runner.report(job_id, 0.85, i18n._("Синтез обзора проекта"))
                 overview = await _run_synthesis(project)
 
         if overview:
@@ -571,7 +574,7 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
         nonlocal done_cnt, partial_cnt, checked
         if runner.is_cancelled(job_id):
             return
-        prompt = TASK_VERIFY_PROMPT.format(
+        prompt = localized(TASK_VERIFY_PROMPT).format(
             project_name=project.name,
             project_context=context,
             decisions=decisions,
@@ -604,17 +607,17 @@ async def verify_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
                 return
             if implemented == "yes":
                 db_task.status = "done"
-                db_task.report = f"[ИИ-проверка] Реализовано. {report}\nФайлы: {', '.join(files)}"
+                db_task.report = i18n._("[ИИ-проверка] Реализовано. {report}\nФайлы: {files}").format(report=report, files=", ".join(files))
                 db_task.done_at = utcnow()
                 done_cnt += 1
             elif implemented == "partial":
-                db_task.report = f"[ИИ-проверка] Частично реализовано. {report}\nФайлы: {', '.join(files)}"
+                db_task.report = i18n._("[ИИ-проверка] Частично реализовано. {report}\nФайлы: {files}").format(report=report, files=", ".join(files))
                 partial_cnt += 1
             else:
-                db_task.report = f"[ИИ-проверка] Не найдено в коде. {report}" if report else db_task.report
+                db_task.report = i18n._("[ИИ-проверка] Не найдено в коде. {report}").format(report=report) if report else db_task.report
             await session.commit()
             await graphdb.upsert_task_node(str(project_id), str(task.id), db_task.title, db_task.status, files)
-        await runner.report(job_id, min(0.95, checked / max(1, len(tasks))), f"Проверено задач: {checked}/{len(tasks)}")
+        await runner.report(job_id, min(0.95, checked / max(1, len(tasks))), i18n._("Проверено задач: {done}/{total}").format(done=checked, total=len(tasks)))
 
     await asyncio.gather(*(check(t) for t in tasks))
     runner.check_cancelled(job_id)

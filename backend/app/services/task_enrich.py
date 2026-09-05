@@ -8,11 +8,13 @@ from sqlalchemy import select, update
 
 from ..config import get_settings
 from ..db import get_sessionmaker
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import Project, TaskItem
 from . import claude_cli, graphdb, rlm
 from .decisions import get_decisions_text
 from .prompts import (
+    localized,
     TASK_ENRICH_INVESTIGATION_QUESTION,
     TASK_ENRICH_PROMPT,
     TASK_ENRICH_SYSTEM,
@@ -102,7 +104,7 @@ async def enrich_one(
     notes_block = human_input_block(task)
 
     # 1. RLM-исследование кодовой базы по задаче (самая долгая фаза — до 60%)
-    question = TASK_ENRICH_INVESTIGATION_QUESTION.format(
+    question = localized(TASK_ENRICH_INVESTIGATION_QUESTION).format(
         title=task.title,
         description=(task.description or "")[:TASK_TEXT_LIMIT],
         notes_block=notes_block,
@@ -110,9 +112,9 @@ async def enrich_one(
     )
 
     async def rlm_stage(value: float, detail: str) -> None:
-        await report(0.05 + 0.55 * value, f"исследование — {detail}")
+        await report(0.05 + 0.55 * value, i18n._("исследование — {detail}").format(detail=detail))
 
-    await report(0.03, "исследование — выбираю файлы по карте знаний")
+    await report(0.03, i18n._("исследование — выбираю файлы по карте знаний"))
     try:
         investigation = await rlm.answer(project, question, on_stage=rlm_stage)
         investigation_text = investigation["answer"]
@@ -120,21 +122,21 @@ async def enrich_one(
             {p for sq in investigation.get("sub_queries", []) for p in sq.get("paths", [])}
         )
         investigation_ok = True
-        await report(0.62, f"исследование готово, файлов: {len(investigated_paths)}")
+        await report(0.62, i18n._("исследование готово, файлов: {count}").format(count=len(investigated_paths)))
     except Exception as e:
         log.warning("RLM-исследование задачи %s упало: %s", task.id, e)
         investigation_text = "(исследование не удалось — опирайся на карту знаний)"
         investigated_paths = []
         investigation_ok = False
-        await report(0.62, "исследование не удалось — опираюсь на карту знаний")
+        await report(0.62, i18n._("исследование не удалось — опираюсь на карту знаний"))
 
     # 2. Синтез детальной задачи
-    await report(0.68, "собираю досье: где смотреть, нюансы, как проверить")
+    await report(0.68, i18n._("собираю досье: где смотреть, нюансы, как проверить"))
     context = await graphdb.get_project_summary_context(pid, 3000)
     existing = await list_existing_tasks_text(project.id, exclude=task.id)
 
     async def synthesize(facts: str) -> dict:
-        prompt = TASK_ENRICH_PROMPT.format(
+        prompt = localized(TASK_ENRICH_PROMPT).format(
             project_name=project.name,
             title=task.title,
             description=(task.description or "(без описания)")[:TASK_TEXT_LIMIT],
@@ -147,7 +149,7 @@ async def enrich_one(
         # Синтез иногда отдаёт синтаксически битый JSON (досье длинное). Ответ
         # стоит секунды, а исследование перед ним — минуты, поэтому падать всей
         # проработкой из-за одной запятой нельзя: пробуем ещё раз.
-        last_error: Exception = claude_cli.ClaudeError("Синтез не выполнялся")
+        last_error: Exception = claude_cli.ClaudeError(i18n._("Синтез не выполнялся"))
         for attempt in (1, 2):
             try:
                 result, _ = await claude_cli.run_json_prompt(
@@ -160,7 +162,7 @@ async def enrich_one(
                     timeout=s.claude_timeout_sec,
                 )
                 if not isinstance(result, dict):
-                    raise claude_cli.ClaudeError("Ожидался JSON-объект проработки")
+                    raise claude_cli.ClaudeError(i18n._("Ожидался JSON-объект проработки"))
                 return result
             except claude_cli.ClaudeError as e:
                 last_error = e
@@ -179,10 +181,10 @@ async def enrich_one(
         str(u).strip()[:300] for u in (obj.get("unresolved") or [])[:5] if str(u).strip()
     ]
     if unresolved and investigation_ok and s.enrich_followup:
-        await report(0.72, f"доисследование: вопросов без ответа — {len(unresolved)}")
+        await report(0.72, i18n._("доисследование: вопросов без ответа — {count}").format(count=len(unresolved)))
 
         async def followup_stage(value: float, detail: str) -> None:
-            await report(0.72 + 0.14 * value, f"доисследование — {detail}")
+            await report(0.72 + 0.14 * value, i18n._("доисследование — {detail}").format(detail=detail))
 
         followup_question = "Ответь строго на эти вопросы по коду проекта:\n" + "\n".join(
             f"- {u}" for u in unresolved
@@ -194,7 +196,7 @@ async def enrich_one(
                 set(investigated_paths)
                 | {p for sq in extra_inv.get("sub_queries", []) for p in sq.get("paths", [])}
             )
-            await report(0.88, "пересобираю описание с учётом доисследования")
+            await report(0.88, i18n._("пересобираю описание с учётом доисследования"))
             obj = await synthesize(investigation_text)
         except Exception as e:
             log.warning("Доисследование задачи %s упало: %s", task.id, e)
@@ -274,7 +276,7 @@ async def enrich_one(
         }
         await session.commit()
 
-    await report(0.95, "сохраняю досье и связи с файлами")
+    await report(0.95, i18n._("сохраняю досье и связи с файлами"))
     await graphdb.upsert_task_node(
         pid, str(task.id), task.title, task.status, (files or investigated_paths)[:30]
     )
@@ -341,7 +343,7 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
         text = detail if total == 1 else f"«{label(t)}» — {detail}"
         await runner.report(job_id, min(0.98, overall), text)
 
-    await runner.report(job_id, 0.01, f"RLM-проработка, задач: {total}")
+    await runner.report(job_id, 0.01, i18n._("RLM-проработка, задач: {count}").format(count=total))
 
     async def run_one(t: TaskItem) -> None:
         nonlocal done, errors
@@ -358,14 +360,14 @@ async def enrich_tasks(job_id: uuid.UUID, project_id: uuid.UUID, params: dict) -
                 failure = str(e)[:120]
         finished = done + errors
         tail = "" if total == 1 else f" ({finished}/{total})"
-        await report_for(t, 1.0, (f"ошибка: {failure}" if failure else "проработана") + tail)
+        await report_for(t, 1.0, (i18n._("ошибка: {error}").format(error=failure) if failure else i18n._("проработана")) + tail)
 
     await asyncio.gather(*(run_one(t) for t in tasks))
     runner.check_cancelled(job_id)
     stats: dict = {"enriched": done, "errors": errors, "total": len(tasks)}
     if errors:
-        stats["final_detail"] = (
-            f"проработано {done} из {total}, с ошибкой: {errors} — "
+        stats["final_detail"] = i18n._(
+            "проработано {done} из {total}, с ошибкой: {errors} — "
             "карточки без досье отправь на проработку ещё раз"
-        )
+        ).format(done=done, total=total, errors=errors)
     return stats

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Decision, Project, ProjectFile, TaskItem, WorkLogEntry
 from ..security import create_service_token
+from .. import i18n
 from . import graphdb, vectors
 
 log = logging.getLogger("projectai.copy")
@@ -34,10 +35,10 @@ _META_DROP = ("service_token", "watch")
 async def _unique_name(session: AsyncSession, owner_id: uuid.UUID, base: str) -> str:
     res = await session.execute(select(Project.name).where(Project.owner_id == owner_id))
     taken = {n for (n,) in res.all()}
-    name = f"{base} — копия"
+    name = i18n._("{base} — копия").format(base=base)
     n = 2
     while name in taken:
-        name = f"{base} — копия {n}"
+        name = i18n._("{base} — копия {n}").format(base=base, n=n)
         n += 1
     # плагин проекта ключуется по слагу имени: одинаковые имена перетирали бы
     # каталог друг друга, поэтому уникальность имени тут не косметика

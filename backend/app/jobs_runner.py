@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 
 from .config import get_settings
 from .db import get_sessionmaker
+from . import i18n
 from .models import Job, utcnow
 
 log = logging.getLogger("projectai.jobs")
@@ -85,7 +86,7 @@ class JobRunner:
             await session.execute(
                 update(Job)
                 .where(Job.status.in_(["queued", "running"]))
-                .values(status="error", error="Прервано перезапуском сервера", finished_at=utcnow())
+                .values(status="error", error=i18n._("Прервано перезапуском сервера"), finished_at=utcnow())
             )
             await session.commit()
         self._workers = [asyncio.create_task(self._worker(i)) for i in range(self._concurrency)]
@@ -118,7 +119,7 @@ class JobRunner:
                 return None
             if job.status == "queued":
                 job.status = "cancelled"
-                job.detail = "Отменено пользователем"
+                job.detail = i18n._("Отменено пользователем")
                 job.finished_at = utcnow()
                 await session.commit()
                 await self._publish_job(job_id)
@@ -126,7 +127,7 @@ class JobRunner:
             if job.status == "running":
                 self._cancel_requested.add(job_id)
                 await session.execute(
-                    update(Job).where(Job.id == job_id).values(detail="Отменяется…")
+                    update(Job).where(Job.id == job_id).values(detail=i18n._("Отменяется…"))
                 )
                 await session.commit()
                 await self._publish_job(job_id)
@@ -203,7 +204,7 @@ class JobRunner:
                 await session.execute(
                     update(Job)
                     .where(Job.id == job_id)
-                    .values(status="cancelled", detail="Отменено пользователем", finished_at=utcnow())
+                    .values(status="cancelled", detail=i18n._("Отменено пользователем"), finished_at=utcnow())
                 )
                 await session.commit()
         except Exception as e:

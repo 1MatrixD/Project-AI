@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 
 type DirList = { path: string; parent: string | null; dirs: { name: string; path: string }[] };
@@ -12,6 +13,8 @@ export default function DirPicker({
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
+  const t = useTranslations("dirPicker");
+  const tCommon = useTranslations("common");
   const [drives, setDrives] = useState<string[]>([]);
   const [list, setList] = useState<DirList | null>(null);
   const [error, setError] = useState("");
@@ -21,9 +24,9 @@ export default function DirPicker({
     try {
       setList(await api<DirList>(`/fs/list?path=${encodeURIComponent(path)}`));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
+      setError(e instanceof Error ? e.message : tCommon("error"));
     }
-  }, []);
+  }, [tCommon]);
 
   useEffect(() => {
     api<string[]>("/fs/drives").then((d) => {
@@ -36,7 +39,7 @@ export default function DirPicker({
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="card w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <div className="font-medium">Выбор каталога проекта</div>
+          <div className="font-medium">{t("title")}</div>
           <button className="text-[var(--muted)] hover:text-white" onClick={onClose}>✕</button>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -55,7 +58,7 @@ export default function DirPicker({
                   className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--surface-2)]"
                   onClick={() => load(list.parent!)}
                 >
-                  ← Вверх
+                  {t("up")}
                 </button>
               )}
               {list.dirs.map((d) => (
@@ -68,16 +71,16 @@ export default function DirPicker({
                 </button>
               ))}
               {list.dirs.length === 0 && (
-                <div className="px-3 py-2 text-sm text-[var(--muted)]">Подкаталогов нет</div>
+                <div className="px-3 py-2 text-sm text-[var(--muted)]">{t("empty")}</div>
               )}
             </div>
           </>
         )}
         {error && <div className="text-sm text-red-400">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn btn-ghost" onClick={onClose}>{tCommon("cancel")}</button>
           <button className="btn" disabled={!list} onClick={() => list && onSelect(list.path)}>
-            Выбрать этот каталог
+            {t("select")}
           </button>
         </div>
       </div>

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session, get_sessionmaker
+from .. import i18n
 from ..deps import get_project
 from ..models import Chat, Message, Project
 from ..schemas import ChatCreate, ChatOut, ChatUpdate, MessageIn, MessageOut
@@ -34,7 +35,7 @@ CHAT_TOOLS = [
 async def _get_chat(session: AsyncSession, project: Project, chat_id: uuid.UUID) -> Chat:
     chat = await session.get(Chat, chat_id)
     if chat is None or chat.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Чат не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Чат не найден"))
     return chat
 
 
@@ -76,11 +77,11 @@ async def update_chat(
         chat.title = data.title[:200]
     if data.model is not None:
         if data.model not in ALLOWED_MODELS:
-            raise HTTPException(status_code=400, detail=f"Модель: {', '.join(sorted(ALLOWED_MODELS))}")
+            raise HTTPException(status_code=400, detail=i18n._("Модель: {options}").format(options=', '.join(sorted(ALLOWED_MODELS))))
         chat.model = data.model
     if data.reasoning is not None:
         if data.reasoning not in ALLOWED_REASONING:
-            raise HTTPException(status_code=400, detail=f"Reasoning: {', '.join(sorted(ALLOWED_REASONING))}")
+            raise HTTPException(status_code=400, detail=i18n._("Reasoning: {options}").format(options=', '.join(sorted(ALLOWED_REASONING))))
         chat.reasoning = data.reasoning
     await session.commit()
     await session.refresh(chat)

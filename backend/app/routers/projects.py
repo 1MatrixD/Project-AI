@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user, get_project
+from .. import i18n
 from ..jobs_runner import runner
 from ..models import ChangeReport, Project, User, WorkLogEntry
 from ..schemas import (
@@ -52,7 +53,7 @@ async def create_project(
 ) -> ProjectOut:
     root = Path(data.root_path)
     if not root.is_dir():
-        raise HTTPException(status_code=400, detail=f"Каталог не найден: {data.root_path}")
+        raise HTTPException(status_code=400, detail=i18n._("Каталог не найден: {path}").format(path=data.root_path))
     project = Project(
         owner_id=user.id,
         name=data.name.strip(),
@@ -149,7 +150,7 @@ async def duplicate_project_endpoint(
     """
     if await runner.has_active(project.id, INDEX_JOB_TYPES):
         raise HTTPException(
-            status_code=409, detail="Идёт индексация — дубль получился бы половинчатым"
+            status_code=409, detail=i18n._("Идёт индексация — дубль получился бы половинчатым")
         )
     copy = await project_copy.duplicate_project(
         session, project, user.id, str((body or {}).get("name") or "")
@@ -164,7 +165,7 @@ async def start_index(
     if data.mode not in ("initial", "update", "reverify"):
         raise HTTPException(status_code=400, detail="mode: initial | update | reverify")
     if await runner.has_active(project.id, ["index"]):
-        raise HTTPException(status_code=409, detail="Индексация уже идёт")
+        raise HTTPException(status_code=409, detail=i18n._("Индексация уже идёт"))
     params: dict = {"mode": data.mode}
     if data.ai_limit is not None:
         params["ai_limit"] = max(0, min(500, data.ai_limit))
@@ -195,7 +196,7 @@ async def set_watch(
         except FileNotFoundError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Наблюдение не запустилось: {e}")
+            raise HTTPException(status_code=500, detail=i18n._("Наблюдение не запустилось: {error}").format(error=e))
     else:
         watcher.stop_watch(project.id)
     db_project = await session.get(Project, project.id)
@@ -221,12 +222,12 @@ async def add_root(
     raw = str(body.get("path", "")).strip()
     root = Path(raw)
     if not raw or not root.is_dir():
-        raise HTTPException(status_code=400, detail=f"Каталог не найден: {raw}")
+        raise HTTPException(status_code=400, detail=i18n._("Каталог не найден: {path}").format(path=raw))
     path = str(root.resolve())
     db_project = await session.get(Project, project.id)
     existing = {str(Path(p).resolve()) for _a, p in get_roots(db_project)}
     if path in existing:
-        raise HTTPException(status_code=409, detail="Этот каталог уже в проекте")
+        raise HTTPException(status_code=409, detail=i18n._("Этот каталог уже в проекте"))
     alias = make_alias(path, db_project)
     meta = dict(db_project.meta)
     meta["extra_roots"] = [*extra_roots(meta), {"alias": alias, "path": path}]
@@ -263,7 +264,7 @@ async def remove_root(
 
     roots_list = extra_roots(project.meta)
     if alias not in {r["alias"] for r in roots_list}:
-        raise HTTPException(status_code=404, detail=f"Каталог «{alias}» не найден в проекте")
+        raise HTTPException(status_code=404, detail=i18n._("Каталог «{alias}» не найден в проекте").format(alias=alias))
 
     db_project = await session.get(Project, project.id)
     meta = dict(db_project.meta)
@@ -329,7 +330,7 @@ async def graph_search(
         log.warning("Fulltext-поиск упал, остаётся семантика: %s", e)
     semantic = await vectors.search(pid, q, limit=limit)
     if ft_error is not None and not semantic:
-        raise HTTPException(status_code=502, detail=f"Поиск по графу недоступен: {ft_error}")
+        raise HTTPException(status_code=502, detail=i18n._("Поиск по графу недоступен: {error}").format(error=ft_error))
 
     out: list[dict] = []
     seen: dict[str, dict] = {}
@@ -362,7 +363,7 @@ async def graph_search(
 async def graph_component(name: str, project: Project = Depends(get_project)) -> dict:
     info = await graphdb.get_component_info(str(project.id), name)
     if info is None:
-        raise HTTPException(status_code=404, detail=f"Компонент «{name}» не найден в карте знаний")
+        raise HTTPException(status_code=404, detail=i18n._("Компонент «{name}» не найден в карте знаний").format(name=name))
     return info
 
 
@@ -370,7 +371,7 @@ async def graph_component(name: str, project: Project = Depends(get_project)) ->
 async def graph_file(path: str, project: Project = Depends(get_project)) -> dict:
     info = await graphdb.get_file_info(str(project.id), path)
     if info is None:
-        raise HTTPException(status_code=404, detail=f"Файл «{path}» не найден в карте знаний")
+        raise HTTPException(status_code=404, detail=i18n._("Файл «{path}» не найден в карте знаний").format(path=path))
     return info
 
 
@@ -380,13 +381,13 @@ async def graph_cypher(
 ) -> list[dict]:
     query = str(body.get("query", "")).strip()
     if not query:
-        raise HTTPException(status_code=400, detail="Пустой запрос")
+        raise HTTPException(status_code=400, detail=i18n._("Пустой запрос"))
     try:
         return await graphdb.run_readonly_cypher(str(project.id), query)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ошибка Cypher: {e}")
+        raise HTTPException(status_code=502, detail=i18n._("Ошибка Cypher: {error}").format(error=e))
 
 
 @router.post("/{project_id}/ask", response_model=AskOut)
@@ -395,7 +396,7 @@ async def ask(data: AskIn, project: Project = Depends(get_project)) -> AskOut:
     try:
         result = await rlm.answer(project, data.question, data.paths)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"RLM-запрос не удался: {e}")
+        raise HTTPException(status_code=502, detail=i18n._("RLM-запрос не удался: {error}").format(error=e))
     return AskOut(**result)
 
 
@@ -429,7 +430,7 @@ async def get_tool_access(
     result: dict = {
         "access": effective_access(project.meta),
         "groups": TOOL_GROUPS,
-        "labels": GROUP_LABELS,
+        "labels": {k: i18n._(v) for k, v in GROUP_LABELS.items()},
     }
     if surface:
         result["allowed_tools"] = sorted(allowed_tools_for_surface(project.meta, surface))
@@ -488,7 +489,7 @@ async def git_import_endpoint(
     Уже импортированные коммиты пропускаются автоматически.
     """
     if await runner.has_active(project.id, ["git_import"]):
-        raise HTTPException(status_code=409, detail="Импорт git уже идёт")
+        raise HTTPException(status_code=409, detail=i18n._("Импорт git уже идёт"))
     body = body or {}
     params: dict = {}
     if body.get("since_days"):
@@ -508,7 +509,7 @@ async def git_import_endpoint(
             if isinstance(rc, dict) and rc.get("path")
         ][:20]
         if not params["repos"]:
-            raise HTTPException(status_code=400, detail="Не выбран ни один репозиторий")
+            raise HTTPException(status_code=400, detail=i18n._("Не выбран ни один репозиторий"))
     job = await runner.submit(project.id, "git_import", params)
     return {"job_id": str(job.id)}
 
@@ -540,11 +541,11 @@ async def plugin_file(path: str, project: Project = Depends(get_project)) -> dic
     root = Path(info["path"]).resolve()
     target = (root / path).resolve()
     if not str(target).startswith(str(root)) or not target.is_file():
-        raise HTTPException(status_code=404, detail="Файл не найден")
+        raise HTTPException(status_code=404, detail=i18n._("Файл не найден"))
     try:
         content = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        raise HTTPException(status_code=415, detail="Файл не читается как текст")
+        raise HTTPException(status_code=415, detail=i18n._("Файл не читается как текст"))
     return {"path": path, "content": content[:200_000]}
 
 
@@ -559,7 +560,7 @@ async def plugin_install_local(project: Project = Depends(get_project)) -> dict:
     """Включить плагин только в этом проекте — через
     `<каталог проекта>/.claude/settings.local.json`, а не глобально в ~/.claude."""
     if not Path(project.root_path).is_dir():
-        raise HTTPException(status_code=400, detail=f"Каталог проекта не найден: {project.root_path}")
+        raise HTTPException(status_code=400, detail=i18n._("Каталог проекта не найден: {path}").format(path=project.root_path))
     try:
         return plugin_gen.install_locally(project)
     except (ValueError, OSError) as e:

@@ -1,16 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/api";
+import { useTranslations } from "next-intl";
+import { api } from "@/lib/api";
+import { useFmt } from "@/lib/format";
 import { toast } from "@/components/Toast";
 import type { Decision } from "@/lib/types";
-
-const SOURCE_LABEL: Record<string, string> = {
-  manual: "человек",
-  meeting: "ИИ · с созвона",
-  doc: "ИИ · из документа",
-  chat: "ИИ · из чата",
-};
 
 /** Соглашения проекта — отдельная страница: их может стать много, и они —
  *  такой же каталог знаний, как файлы и материалы. Пишут сюда и человек
@@ -18,6 +13,9 @@ const SOURCE_LABEL: Record<string, string> = {
  *  учитываются в проработке задач, декомпозиции, ИИ-проверке, git-импорте
  *  и системном промпте чата. */
 export default function DecisionsTab({ projectId }: { projectId: string }) {
+  const t = useTranslations("decisions");
+  const tCommon = useTranslations("common");
+  const fmt = useFmt();
   const [decisions, setDecisions] = useState<Decision[] | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -38,7 +36,7 @@ export default function DecisionsTab({ projectId }: { projectId: string }) {
       body: JSON.stringify({ topic, text }),
     });
     setShowAdd(false);
-    toast("Соглашение записано — все будущие проработки и проверки будут его учитывать.");
+    toast(t("added"));
     load();
   }
 
@@ -48,51 +46,44 @@ export default function DecisionsTab({ projectId }: { projectId: string }) {
       body: JSON.stringify({ topic, text }),
     });
     setEditId(null);
-    toast("Соглашение обновлено.");
+    toast(t("updated"));
     load();
   }
 
   async function remove(id: string) {
-    if (!confirm("Удалить соглашение?")) return;
+    if (!confirm(t("confirmDelete"))) return;
     await api(`/projects/${projectId}/decisions/${id}`, { method: "DELETE" });
-    toast("Соглашение удалено.");
+    toast(t("deleted"));
     load();
   }
+
+  const sourceLabel = (s: string) => (t.has(`source.${s}`) ? t(`source.${s}`) : s);
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <div className="card p-5 space-y-3">
         <div className="flex items-center justify-between">
-          <div className="font-medium">Соглашения проекта</div>
+          <div className="font-medium">{t("title")}</div>
           <button className="btn btn-ghost text-sm" onClick={() => setShowAdd(!showAdd)}>
-            {showAdd ? "✕" : "+ Добавить"}
+            {showAdd ? "✕" : t("add")}
           </button>
         </div>
         <div className="text-xs text-[var(--muted)] leading-relaxed">
-          То, чего <b>в коде не прочитать</b>: что считается правильным сейчас и от чего
-          отказались. Код обычно отстаёт от решений: без заметки «роль ORGANIZER упразднена,
-          теперь MANAGER + права» ИИ найдёт остатки старого подхода и заведёт их как баг;
-          с ней — поймёт, что это осознанный переход, и будет доделывать миграцию, а не
-          откатывать её. Пишет сюда и человек, и ИИ: скажи в Claude Code «мы сменили
-          подход» — он зафиксирует через record_decision. Автоматически извлекаются из
-          созвонов и документов.
+          {t.rich("intro", { b: (chunks) => <b>{chunks}</b> })}
         </div>
         {showAdd && (
           <DecisionForm
             onSubmit={add}
             onCancel={() => setShowAdd(false)}
-            submitLabel="Сохранить"
+            submitLabel={tCommon("save")}
           />
         )}
       </div>
 
       {decisions === null ? (
-        <div className="text-sm text-[var(--muted)] text-center py-6">Загрузка…</div>
+        <div className="text-sm text-[var(--muted)] text-center py-6">{tCommon("loading")}</div>
       ) : decisions.length === 0 ? (
-        <div className="card p-5 text-sm text-[var(--muted)]">
-          Пока нет — добавь вручную, попроси ИИ в Claude Code зафиксировать
-          (record_decision) или загрузи созвон: решения извлекаются автоматически.
-        </div>
+        <div className="card p-5 text-sm text-[var(--muted)]">{t("empty")}</div>
       ) : (
         decisions.map((d) =>
           editId === d.id ? (
@@ -102,7 +93,7 @@ export default function DecisionsTab({ projectId }: { projectId: string }) {
                 initialText={d.text}
                 onSubmit={(topic, text) => save(d.id, topic, text)}
                 onCancel={() => setEditId(null)}
-                submitLabel="Сохранить"
+                submitLabel={tCommon("save")}
               />
             </div>
           ) : (
@@ -112,14 +103,14 @@ export default function DecisionsTab({ projectId }: { projectId: string }) {
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 shrink-0">
                   <button
                     className="text-xs text-[var(--muted)] hover:text-[var(--accent)] px-1.5"
-                    title="Править"
+                    title={t("edit")}
                     onClick={() => setEditId(d.id)}
                   >
                     ✎
                   </button>
                   <button
                     className="text-xs text-[var(--muted)] hover:text-red-300 px-1.5"
-                    title="Удалить"
+                    title={tCommon("delete")}
                     onClick={() => remove(d.id)}
                   >
                     ✕
@@ -130,8 +121,8 @@ export default function DecisionsTab({ projectId }: { projectId: string }) {
                 {d.text}
               </div>
               <div className="text-[10px] text-[var(--muted)] flex items-center gap-1.5">
-                <span className="chip">{SOURCE_LABEL[d.source] ?? d.source}</span>
-                {fmtDate(d.updated_at)}
+                <span className="chip">{sourceLabel(d.source)}</span>
+                {fmt.date(d.updated_at)}
               </div>
             </div>
           )
@@ -154,6 +145,8 @@ function DecisionForm({
   onCancel: () => void;
   submitLabel: string;
 }) {
+  const t = useTranslations("decisions.form");
+  const tCommon = useTranslations("common");
   const [topic, setTopic] = useState(initialTopic);
   const [text, setText] = useState(initialText);
   const [busy, setBusy] = useState(false);
@@ -165,7 +158,7 @@ function DecisionForm({
     try {
       await onSubmit(topic.trim(), text.trim());
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Ошибка", "error");
+      toast(err instanceof Error ? err.message : tCommon("error"), "error");
     } finally {
       setBusy(false);
     }
@@ -175,19 +168,19 @@ function DecisionForm({
     <form onSubmit={submit} className="space-y-2">
       <input
         className="input"
-        placeholder="Тема (например: Роли в админке)"
+        placeholder={t("topic")}
         value={topic}
         onChange={(e) => setTopic(e.target.value)}
       />
       <textarea
         className="input min-h-20 text-sm"
-        placeholder="Актуальное решение: что теперь правильно и от чего отказались…"
+        placeholder={t("text")}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="flex gap-2 justify-end">
         <button type="button" className="btn btn-ghost text-sm" onClick={onCancel} disabled={busy}>
-          Отмена
+          {tCommon("cancel")}
         </button>
         <button className="btn text-sm" disabled={busy || !topic.trim() || !text.trim()}>
           {submitLabel}

@@ -2,6 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "backend",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "& ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010"
+      ],
+      "cwd": "backend",
+      "port": 8010
+    },
+    {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
